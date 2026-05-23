@@ -1,0 +1,138 @@
+# mailtagger configuration file
+# All duration fields accept Go duration strings: "5m", "30s", "1h", etc.
+# Environment variables can be referenced using ${VAR_NAME} syntax
+
+# LLM provider configuration
+llm:
+  # Provider name: "openai", "anthropic", "gemini", or "ollama"
+  provider: openai
+  
+  # Model identifier (provider-specific)
+  # Examples:
+  #   OpenAI: "gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"
+  #   Anthropic: "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"
+  #   Gemini: "gemini-pro", "gemini-1.5-pro"
+  #   Ollama: "llama2", "mistral"
+  model: gpt-4-turbo
+  
+  # API key (supports ${ENV} expansion)
+  # Required for all providers except ollama
+  api_key: ${OPENAI_API_KEY}
+  
+  # Optional: Custom API endpoint (useful for proxies or self-hosted models)
+  # Leave empty to use the default provider endpoint
+  base_url: ""
+  
+  # Temperature controls randomness (0.0 = deterministic, 1.0 = creative)
+  # Recommended: 0.0-0.3 for classification tasks
+  temperature: 0.1
+  
+  # Maximum tokens in the LLM response
+  # Recommended: 100-500 for classification tasks
+  max_tokens: 200
+  
+  # Request timeout duration
+  timeout: 30s
+
+# Gmail accounts to monitor
+accounts:
+  # Account identifier (used in logs and database)
+  - id: primary
+    
+    # Gmail email address
+    email: you@gmail.com
+    
+    # Path to OAuth 2.0 client_secret.json (from Google Cloud Console)
+    # Supports ${ENV} expansion
+    client_secret_path: /etc/mailtagger/client_secret.json
+    
+    # Path where OAuth tokens will be stored
+    # Supports ${ENV} expansion
+    token_path: /var/lib/mailtagger/tokens/primary.json
+    
+    # How often to poll Gmail for new messages
+    poll_interval: 5m
+    
+    # Optional: Gmail search query to filter messages
+    # Leave empty to process all messages
+    # Examples:
+    #   "is:unread" - only unread messages
+    #   "in:inbox -label:automated" - inbox messages without the automated label
+    #   "newer_than:7d" - messages from the last 7 days
+    query: "is:unread"
+
+  # Example: Multiple accounts
+  # - id: work
+  #   email: work@example.com
+  #   client_secret_path: /etc/mailtagger/work_client_secret.json
+  #   token_path: /var/lib/mailtagger/tokens/work.json
+  #   poll_interval: 10m
+  #   query: ""
+
+# State storage configuration
+store:
+  # Storage type: "sqlite" (persistent) or "memory" (in-memory, for testing)
+  type: sqlite
+  
+  # Path to SQLite database file (required for type: sqlite)
+  # Supports ${ENV} expansion
+  path: /var/lib/mailtagger/state.db
+
+# HTTP server configuration
+http:
+  # Listen address for the HTTP server
+  # Examples: ":8080", "localhost:8080", "0.0.0.0:8080"
+  addr: :8080
+  
+  # Read timeout for incoming requests
+  read_timeout: 10s
+  
+  # Write timeout for outgoing responses
+  write_timeout: 10s
+
+# Classification categories
+# Each category maps to a Gmail label that will be applied to matching messages
+categories:
+  # Category identifier (used in prompts and logs)
+  - name: newsletter
+    
+    # Gmail label name to apply
+    # The label must already exist in Gmail or will be created
+    label: automated/newsletter
+    
+    # Description for the LLM classifier
+    # Be specific and include examples of what belongs in this category
+    description: |
+      Marketing emails, promotional content, newsletters from companies or products.
+      Includes automated campaign emails, product announcements, and sales promotions.
+
+  - name: receipt
+    label: automated/receipt
+    description: |
+      Purchase confirmations, order receipts, payment confirmations, invoices.
+      Includes e-commerce confirmations, subscription renewal notices, and billing statements.
+
+  - name: notification
+    label: automated/notification
+    description: |
+      Service notifications, alerts, status updates, automated system messages.
+      Includes GitHub notifications, CI/CD results, monitoring alerts, and social media updates.
+
+  - name: personal
+    label: automated/personal
+    description: |
+      Personal correspondence from individuals, family, or friends.
+      Human-written messages that are not automated or bulk-sent.
+
+  # Example: Additional categories
+  # - name: spam
+  #   label: automated/spam
+  #   description: |
+  #     Unsolicited bulk email, phishing attempts, scams, or unwanted promotional content.
+  #     Low-quality or suspicious messages that should be filtered out.
+  
+  # - name: financial
+  #   label: automated/financial
+  #   description: |
+  #     Bank statements, credit card alerts, investment updates, tax documents.
+  #     Financial account notifications and money-related messages.
