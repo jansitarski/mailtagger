@@ -1,5 +1,44 @@
+# Go build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+mailtagger
+
+# Test binary
+*.test
+
+# Go coverage
+*.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment/secrets
+.env
+.env.local
+*.pem
+client_secret*.json
+
+# SQLite databases (local dev)
+*.db
+state.db
 
 # Beads / Dolt files (added by bd init)
 .dolt/
-*.db
 .beads-credential-key
