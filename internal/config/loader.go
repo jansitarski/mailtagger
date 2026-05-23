@@ -27,6 +27,11 @@ func Load(path string) (*Config, error) {
 	// Expand environment variables in config values
 	expandEnvVars(&cfg)
 
+	// Validate the configuration
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
+	}
+
 	return &cfg, nil
 }
 
