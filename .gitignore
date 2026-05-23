@@ -43,3 +43,9 @@ state.db
 .dolt/
 .beads-credential-key
 .beads/
+
+# Local docs and AI config (not for repo)
+docs/
+.claude/
+AGENTS.md
+CLAUDE.md
