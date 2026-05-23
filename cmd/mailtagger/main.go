@@ -28,6 +28,7 @@ It polls Gmail, classifies new messages with an LLM, and applies labels.`,
 	rootCmd.SetVersionTemplate("mailtagger {{.Version}}\n")
 
 	rootCmd.AddCommand(newServeCmd())
+	rootCmd.AddCommand(newAuthCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -92,5 +93,38 @@ func runServe(ctx context.Context, configPath, addr string) error {
 	}
 
 	slog.Info("server stopped")
+	return nil
+}
+
+func newAuthCmd() *cobra.Command {
+	var accountID string
+	var clientSecretPath string
+
+	cmd := &cobra.Command{
+		Use:   "auth",
+		Short: "Authenticate a Gmail account (headless fallback)",
+		Long: `Performs OAuth authentication for a Gmail account via CLI.
+This is the headless fallback when the web setup wizard is not accessible.
+It prints an authorization URL and prompts for the redirect URL after consent.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAuth(accountID, clientSecretPath)
+		},
+	}
+
+	cmd.Flags().StringVar(&accountID, "account", "primary", "account ID to authenticate")
+	cmd.Flags().StringVar(&clientSecretPath, "client-secret", "", "path to OAuth client_secret.json file")
+	cmd.MarkFlagRequired("client-secret")
+
+	return cmd
+}
+
+func runAuth(accountID, clientSecretPath string) error {
+	slog.Info("auth command placeholder", "account", accountID, "client_secret", clientSecretPath)
+	fmt.Println("OAuth authentication flow not yet implemented.")
+	fmt.Println("This will:")
+	fmt.Println("  1. Read OAuth credentials from", clientSecretPath)
+	fmt.Println("  2. Generate an authorization URL")
+	fmt.Println("  3. Prompt you to paste the redirect URL after consent")
+	fmt.Println("  4. Exchange the code for tokens and store them")
 	return nil
 }
