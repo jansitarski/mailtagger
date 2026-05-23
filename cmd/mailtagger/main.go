@@ -29,6 +29,7 @@ It polls Gmail, classifies new messages with an LLM, and applies labels.`,
 
 	rootCmd.AddCommand(newServeCmd())
 	rootCmd.AddCommand(newAuthCmd())
+	rootCmd.AddCommand(newResetCursorCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -126,5 +127,37 @@ func runAuth(accountID, clientSecretPath string) error {
 	fmt.Println("  2. Generate an authorization URL")
 	fmt.Println("  3. Prompt you to paste the redirect URL after consent")
 	fmt.Println("  4. Exchange the code for tokens and store them")
+	return nil
+}
+
+func newResetCursorCmd() *cobra.Command {
+	var accountID string
+	var dbPath string
+
+	cmd := &cobra.Command{
+		Use:   "reset-cursor",
+		Short: "Reset the Gmail history cursor to re-process messages",
+		Long: `Resets the history_id cursor for an account, causing mailtagger to re-process
+messages from the beginning. Use this if you want to re-classify all emails.
+WARNING: This may result in duplicate label applications if messages are already labeled.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runResetCursor(accountID, dbPath)
+		},
+	}
+
+	cmd.Flags().StringVar(&accountID, "account", "", "account ID to reset (required, or 'all' for all accounts)")
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/mailtagger/state.db", "path to SQLite database")
+	cmd.MarkFlagRequired("account")
+
+	return cmd
+}
+
+func runResetCursor(accountID, dbPath string) error {
+	slog.Info("reset-cursor command placeholder", "account", accountID, "db", dbPath)
+	fmt.Println("Cursor reset not yet implemented.")
+	fmt.Println("This will:")
+	fmt.Println("  1. Open the database at", dbPath)
+	fmt.Println("  2. Reset history_id for account:", accountID)
+	fmt.Println("  3. Optionally clear processed_messages for the account")
 	return nil
 }
