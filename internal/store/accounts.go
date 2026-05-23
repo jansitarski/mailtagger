@@ -108,3 +108,16 @@ func (s *Store) UpdateHistoryID(accountID int64, historyID string) error {
 	}
 	return nil
 }
+
+// UpdateToken updates the encrypted_token for an account.
+func (s *Store) UpdateToken(accountID int64, encryptedToken []byte) error {
+	_, err := s.db.Exec(`
+		UPDATE accounts
+		SET encrypted_token = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, encryptedToken, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to update token: %w", err)
+	}
+	return nil
+}
