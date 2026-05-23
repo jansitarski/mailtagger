@@ -3,6 +3,7 @@ package gmail
 import (
 	"encoding/base64"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/jaytaylor/html2text"
@@ -149,4 +150,93 @@ func ExtractBodyWithOptions(msg *gmail.Message, opts BodyExtractionOptions) (str
 	}
 
 	return body, nil
+}
+
+// StripQuotedReply removes quoted reply text from an email body.
+// It looks for common reply markers and removes everything after them.
+var quotedReplyPatterns = []*regexp.Regexp{
+	// Gmail/Outlook style: "On [date], [person] wrote:"
+	regexp.MustCompile(`(?m)^On .+wrote:$`),
+	// Common reply marker: "-----Original Message-----"
+	regexp.MustCompile(`(?m)^-+\s*Original Message\s*-+$`),
+	// Common reply marker: "> " at start of line
+	regexp.MustCompile(`(?m)^>\s`),
+	// Reply line with date
+	regexp.MustCompile(`(?m)^.+\d{4}.+wrote:$`),
+	// Gmail mobile: "On [date] <email> wrote:"
+	regexp.MustCompile(`(?m)^On .+<.+@.+>.+wrote:$`),
+	// "From:" style reply header
+	regexp.MustCompile(`(?m)^From:\s*.+$`),
+	// Horizontal line separators (often used before quoted content)
+	regexp.MustCompile(`(?m)^_{3,}$`),
+	regexp.MustCompile(`(?m)^-{3,}$`),
+}
+
+// StripQuotedReply removes quoted reply content from the email body.
+func StripQuotedReply(body string) string {
+	// Try each pattern and find the earliest match
+	earliestIndex := len(body)
+	
+	for _, pattern := range quotedReplyPatterns {
+		if loc := pattern.FindStringIndex(body); loc != nil && loc[0] < earliestIndex {
+			earliestIndex = loc[0]
+		}
+	}
+	
+	// If we found a quoted section, trim everything after it
+	if earliestIndex < len(body) {
+		body = body[:earliestIndex]
+	}
+	
+	// Trim trailing whitespace
+	return strings.TrimSpace(body)
+}
+
+// TruncateBody truncates the body to the specified maximum length.
+// Tries to end at a word boundary for cleaner truncation.
+func TruncateBody(body string, maxLength int) string {
+	if maxLength <= 0 || len(body) <= maxLength {
+		return body
+	}
+	
+	truncated := body[:maxLength]
+	
+	// Try to end at a word boundary
+	if idx := strings.LastIndex(truncated, " "); idx > maxLength-100 && idx > 0 {
+		truncated = truncated[:idx]
+	}
+	
+	return strings.TrimSpace(truncated) + "..."
+}
+
+// CleanBody performs common cleaning operations on email body text:
+// - Strips quoted replies
+// - Truncates to max length
+// - Normalizes whitespace
+func CleanBody(body string, maxLength int) string {
+	// Strip quoted replies first
+	body = StripQuotedReply(body)
+	
+	// Normalize whitespace (collapse multiple spaces/newlines)
+	body = normalizeWhitespace(body)
+	
+	// Truncate if needed
+	if maxLength > 0 {
+		body = TruncateBody(body, maxLength)
+	}
+	
+	return strings.TrimSpace(body)
+}
+
+// normalizeWhitespace collapses multiple consecutive whitespace characters.
+func normalizeWhitespace(s string) string {
+	// Replace multiple spaces with single space
+	spacePattern := regexp.MustCompile(`[ \t]+`)
+	s = spacePattern.ReplaceAllString(s, " ")
+	
+	// Replace more than 2 consecutive newlines with 2 newlines
+	newlinePattern := regexp.MustCompile(`\n{3,}`)
+	s = newlinePattern.ReplaceAllString(s, "\n\n")
+	
+	return s
 }
