@@ -69,14 +69,13 @@ func (c *Client) GetMessage(ctx context.Context, messageID string) (*Message, er
 }
 
 // GetMessages fetches multiple messages by their IDs.
-// Returns a map of message ID to Message, and any errors encountered.
+// Returns a map of message ID to Message. Fails fast on the first error.
 func (c *Client) GetMessages(ctx context.Context, messageIDs []string) (map[string]*Message, error) {
 	messages := make(map[string]*Message)
 	
 	for _, msgID := range messageIDs {
 		msg, err := c.GetMessage(ctx, msgID)
 		if err != nil {
-			// Log error but continue with other messages
 			return nil, fmt.Errorf("failed to fetch message %s: %w", msgID, err)
 		}
 		messages[msgID] = msg

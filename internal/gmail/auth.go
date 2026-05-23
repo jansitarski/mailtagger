@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"golang.org/x/oauth2"
 )
@@ -25,34 +26,50 @@ type TokenCrypto interface {
 }
 
 // StoreTokenSource implements oauth2.TokenSource that retrieves and refreshes
-// tokens from an encrypted store.
+// tokens from an encrypted store. It caches the token in memory to avoid
+// repeated store/decrypt operations on every API call.
 type StoreTokenSource struct {
-	email       string
-	config      *oauth2.Config
-	store       TokenStore
-	crypto      TokenCrypto
-	encryptKey  []byte
+	email      string
+	config     *oauth2.Config
+	store      TokenStore
+	crypto     TokenCrypto
+	encryptKey []byte
+	ctx        context.Context
+
+	mu          sync.Mutex
+	cachedToken *oauth2.Token
 }
 
 // NewStoreTokenSource creates a token source that manages tokens in the store.
+// ctx is used for token refresh operations.
 // config is the OAuth2 configuration.
 // store provides access to encrypted tokens.
 // crypto provides encryption/decryption.
 // encryptKey is the AES key for token encryption (16, 24, or 32 bytes).
-func NewStoreTokenSource(email string, config *oauth2.Config, store TokenStore, crypto TokenCrypto, encryptKey []byte) *StoreTokenSource {
+func NewStoreTokenSource(ctx context.Context, email string, config *oauth2.Config, store TokenStore, crypto TokenCrypto, encryptKey []byte) *StoreTokenSource {
 	return &StoreTokenSource{
 		email:      email,
 		config:     config,
 		store:      store,
 		crypto:     crypto,
 		encryptKey: encryptKey,
+		ctx:        ctx,
 	}
 }
 
 // Token implements oauth2.TokenSource.
-// It retrieves the token from the store, checks if it needs refresh,
+// It retrieves the token from cache or store, checks if it needs refresh,
 // and refreshes it if necessary, updating the store with the new token.
+// This method is safe for concurrent use.
 func (s *StoreTokenSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Return cached token if still valid
+	if s.cachedToken != nil && s.cachedToken.Valid() {
+		return s.cachedToken, nil
+	}
+
 	// Get the account from the store
 	accountID, encryptedToken, err := s.store.GetAccountByEmail(s.email)
 	if err != nil {
@@ -73,11 +90,12 @@ func (s *StoreTokenSource) Token() (*oauth2.Token, error) {
 
 	// Check if the token needs refresh
 	if token.Valid() {
+		s.cachedToken = &token
 		return &token, nil
 	}
 
-	// Token is expired or invalid, refresh it
-	tokenSource := s.config.TokenSource(context.Background(), &token)
+	// Token is expired or invalid, refresh it using the provided context
+	tokenSource := s.config.TokenSource(s.ctx, &token)
 	newToken, err := tokenSource.Token()
 	if err != nil {
 		return nil, fmt.Errorf("failed to refresh token: %w", err)
@@ -87,6 +105,9 @@ func (s *StoreTokenSource) Token() (*oauth2.Token, error) {
 	if err := s.saveToken(accountID, newToken); err != nil {
 		return nil, fmt.Errorf("failed to save refreshed token: %w", err)
 	}
+
+	// Cache the new token
+	s.cachedToken = newToken
 
 	return newToken, nil
 }

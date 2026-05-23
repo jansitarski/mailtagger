@@ -23,11 +23,17 @@ func NewStoreAdapter(
 
 // GetAccountByEmail implements TokenStore.
 func (a *StoreAdapter) GetAccountByEmail(email string) (int64, []byte, error) {
+	if a.getAccountByEmail == nil {
+		return 0, nil, fmt.Errorf("getAccountByEmail function not set")
+	}
 	return a.getAccountByEmail(email)
 }
 
 // UpdateToken implements TokenStore.
 func (a *StoreAdapter) UpdateToken(accountID int64, encryptedToken []byte) error {
+	if a.updateToken == nil {
+		return fmt.Errorf("updateToken function not set")
+	}
 	return a.updateToken(accountID, encryptedToken)
 }
 

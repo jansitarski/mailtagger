@@ -210,9 +210,9 @@ More quoted content.`
 	}
 }
 
-// Helper function to encode string to base64url
+// Helper function to encode string to base64url (without padding, like Gmail)
 func encodeBase64URL(s string) string {
-	return base64.URLEncoding.EncodeToString([]byte(s))
+	return base64.RawURLEncoding.EncodeToString([]byte(s))
 }
 
 func containsSubstring(s, substr string) bool {

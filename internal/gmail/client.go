@@ -28,17 +28,19 @@ func NewClient(ctx context.Context, email string, clientSecretPath string, token
 		return nil, fmt.Errorf("failed to read client secret file: %w", err)
 	}
 
-	// Parse the OAuth2 config from client_secret.json
-	config, err := google.ConfigFromJSON(clientSecretData, gmail.GmailModifyScope)
+	// Parse the OAuth2 config from client_secret.json to validate it
+	_, err = google.ConfigFromJSON(clientSecretData, gmail.GmailModifyScope)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse client secret: %w", err)
 	}
 
-	// Create an HTTP client with the token source
-	httpClient := config.Client(ctx, &oauth2.Token{})
-	if tokenSource != nil {
-		httpClient = oauth2.NewClient(ctx, tokenSource)
+	// Require a valid token source for authenticated requests
+	if tokenSource == nil {
+		return nil, fmt.Errorf("tokenSource is required for authenticated Gmail API access")
 	}
+
+	// Create an HTTP client with the token source
+	httpClient := oauth2.NewClient(ctx, tokenSource)
 
 	// Create the Gmail service
 	service, err := gmail.NewService(ctx, option.WithHTTPClient(httpClient))

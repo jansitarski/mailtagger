@@ -69,14 +69,19 @@ func findPartByMimeType(part *gmail.MessagePart, mimeType string) string {
 }
 
 // decodeBase64URLString decodes a Gmail base64url-encoded string.
+// Gmail uses base64url encoding WITHOUT padding (RFC 4648).
 func decodeBase64URLString(s string) (string, error) {
-	// Gmail uses base64url encoding (RFC 4648)
-	data, err := base64.URLEncoding.DecodeString(s)
+	// Gmail uses base64url encoding without padding (RawURLEncoding)
+	data, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		// Try standard base64 as fallback
-		data, err = base64.StdEncoding.DecodeString(s)
+		// Try with padding as fallback
+		data, err = base64.URLEncoding.DecodeString(s)
 		if err != nil {
-			return "", fmt.Errorf("failed to decode base64: %w", err)
+			// Try raw standard base64 as last resort
+			data, err = base64.RawStdEncoding.DecodeString(s)
+			if err != nil {
+				return "", fmt.Errorf("failed to decode base64: %w", err)
+			}
 		}
 	}
 	return string(data), nil

@@ -15,8 +15,6 @@ type HistoryResult struct {
 	MessageIDs []string
 	// NextHistoryID is the history ID to use for the next sync
 	NextHistoryID string
-	// HasMore indicates if there are more history records to fetch
-	HasMore bool
 	// Bootstrapped indicates if this was a bootstrap operation (history was invalid)
 	Bootstrapped bool
 }
