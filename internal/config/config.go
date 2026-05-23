@@ -64,7 +64,7 @@ func (c *Config) ParsedDurations() (map[string]time.Duration, error) {
 		durations["llm.timeout"] = d
 	}
 	
-	for i, acc := range c.Accounts {
+	for _, acc := range c.Accounts {
 		if acc.PollInterval != "" {
 			d, err := time.ParseDuration(acc.PollInterval)
 			if err != nil {
