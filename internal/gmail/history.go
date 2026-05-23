@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"google.golang.org/api/gmail/v1"
+	"google.golang.org/api/googleapi"
 )
 
 // HistoryResult contains the results of a history sync operation.
@@ -16,10 +17,13 @@ type HistoryResult struct {
 	NextHistoryID string
 	// HasMore indicates if there are more history records to fetch
 	HasMore bool
+	// Bootstrapped indicates if this was a bootstrap operation (history was invalid)
+	Bootstrapped bool
 }
 
 // SyncHistory fetches message additions since the given historyID.
 // Returns message IDs added since the historyID and the new historyID for the next sync.
+// If the history ID is invalid (404), it automatically falls back to bootstrapping.
 // If historyID is empty, this function will return an error indicating a bootstrap is needed.
 func (c *Client) SyncHistory(ctx context.Context, startHistoryID string) (*HistoryResult, error) {
 	if startHistoryID == "" {
@@ -62,6 +66,11 @@ func (c *Client) SyncHistory(ctx context.Context, startHistoryID string) (*Histo
 	})
 
 	if err != nil {
+		// Check if this is a 404 error (history ID no longer valid)
+		if apiErr, ok := err.(*googleapi.Error); ok && apiErr.Code == 404 {
+			// History ID is invalid, fall back to bootstrap
+			return c.Bootstrap(ctx)
+		}
 		return nil, fmt.Errorf("failed to list history: %w", err)
 	}
 
@@ -88,4 +97,40 @@ func (c *Client) GetCurrentHistoryID(ctx context.Context) (string, error) {
 	}
 
 	return fmt.Sprintf("%d", profile.HistoryId), nil
+}
+
+// Bootstrap performs a full mailbox scan to get all message IDs and the current history ID.
+// This is used when there's no history ID or when the history ID is no longer valid (404).
+// Note: This can be expensive for large mailboxes. Consider using query filters.
+func (c *Client) Bootstrap(ctx context.Context) (*HistoryResult, error) {
+	result := &HistoryResult{
+		MessageIDs:   []string{},
+		Bootstrapped: true,
+	}
+
+	// List all messages
+	req := c.service.Users.Messages.List("me").Context(ctx)
+
+	// Execute the request with pagination
+	err := req.Pages(ctx, func(resp *gmail.ListMessagesResponse) error {
+		for _, msg := range resp.Messages {
+			if msg.Id != "" {
+				result.MessageIDs = append(result.MessageIDs, msg.Id)
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to bootstrap messages: %w", err)
+	}
+
+	// Get the current history ID for future syncs
+	historyID, err := c.GetCurrentHistoryID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get history ID after bootstrap: %w", err)
+	}
+	result.NextHistoryID = historyID
+
+	return result, nil
 }
