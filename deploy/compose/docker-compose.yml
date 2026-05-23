@@ -1,0 +1,22 @@
+services:
+  mailtagger:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+    image: mailtagger:local
+    restart: unless-stopped
+    volumes:
+      - ./config.yaml:/etc/mailtagger/config.yaml:ro
+      - mailtagger-state:/var/lib/mailtagger
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
+      MAILTAGGER_TOKEN_KEY: ${MAILTAGGER_TOKEN_KEY:-}
+    ports:
+      - "8080:8080"
+
+volumes:
+  mailtagger-state:

@@ -1,0 +1,45 @@
+# mailtagger example configuration
+log_level: info
+mode: poll
+poll_interval: 30s
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  base_url: ""
+  max_body_chars: 4000
+  temperature: 0.1
+  timeout: 30s
+
+label_prefix: "AI/"
+
+categories:
+  - name: Work
+    description: "Jobs, coworkers, meetings, projects, professional tasks"
+  - name: Personal
+    description: "Friends, family, general personal life"
+  - name: Finance
+    description: "Banks, invoices, receipts, bills, payment confirmations"
+  - name: Shopping
+    description: "Order confirmations, promotions, store updates"
+  - name: Travel
+    description: "Booking confirmations, tickets, hotels, itineraries"
+  - name: Newsletters
+    description: "Recurring marketing or subscription emails"
+  - name: System
+    description: "One-time codes, activations, registrations"
+  - name: Alerts
+    description: "Security or change notifications about accounts/infrastructure"
+  - name: Others
+    description: "Relevant emails that don't clearly fit elsewhere"
+
+accounts: []
+
+store:
+  path: /var/lib/mailtagger/state.db
+  retention_days: 90
+
+http:
+  addr: ":8080"
+  metrics: true
