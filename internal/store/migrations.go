@@ -1,7 +1,6 @@
 package store
 
 import (
-	"database/sql"
 	"embed"
 	"fmt"
 	"sort"
@@ -82,6 +81,9 @@ func (s *Store) Migrate() error {
 			return fmt.Errorf("failed to commit migration %s: %w", filename, err)
 		}
 	}
+
+	// Start GC after successful migrations
+	s.StartGC()
 
 	return nil
 }

@@ -16,6 +16,7 @@ type Store struct {
 	gcCtx           context.Context
 	gcCancel        context.CancelFunc
 	retentionDays   int
+	gcStarted       bool
 }
 
 // Open opens a SQLite database at the given path and configures it with WAL mode.
@@ -49,10 +50,8 @@ func Open(path string, retentionDays int) (*Store, error) {
 		gcCtx:         ctx,
 		gcCancel:      cancel,
 		retentionDays: retentionDays,
+		gcStarted:     false,
 	}
-
-	// Start the GC goroutine
-	go s.gcLoop()
 
 	return s, nil
 }
@@ -73,14 +72,20 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+// StartGC starts the garbage collection goroutine.
+// This is called automatically after Migrate() completes.
+func (s *Store) StartGC() {
+	if !s.gcStarted {
+		s.gcStarted = true
+		go s.gcLoop()
+	}
+}
+
 // gcLoop runs the garbage collection loop for processed messages.
 // It runs every hour and deletes messages older than the retention period.
 func (s *Store) gcLoop() {
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
-
-	// Run immediately on startup
-	s.runGC()
 
 	for {
 		select {
