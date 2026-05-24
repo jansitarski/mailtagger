@@ -34,40 +34,8 @@ llm:
   # Request timeout duration
   timeout: 30s
 
-# Gmail accounts to monitor
-accounts:
-  # Account identifier (used in logs and database)
-  - id: primary
-    
-    # Gmail email address
-    email: you@gmail.com
-    
-    # Path to OAuth 2.0 client_secret.json (from Google Cloud Console)
-    # Supports ${ENV} expansion
-    client_secret_path: /etc/mailtagger/client_secret.json
-    
-    # Path where OAuth tokens will be stored
-    # Supports ${ENV} expansion
-    token_path: /var/lib/mailtagger/tokens/primary.json
-    
-    # How often to poll Gmail for new messages
-    poll_interval: 5m
-    
-    # Optional: Gmail search query to filter messages
-    # Leave empty to process all messages
-    # Examples:
-    #   "is:unread" - only unread messages
-    #   "in:inbox -label:automated" - inbox messages without the automated label
-    #   "newer_than:7d" - messages from the last 7 days
-    query: "is:unread"
-
-  # Example: Multiple accounts
-  # - id: work
-  #   email: work@example.com
-  #   client_secret_path: /etc/mailtagger/work_client_secret.json
-  #   token_path: /var/lib/mailtagger/tokens/work.json
-  #   poll_interval: 10m
-  #   query: ""
+# How often to poll Gmail for new messages
+poll_interval: 5m
 
 # State storage configuration
 store:
