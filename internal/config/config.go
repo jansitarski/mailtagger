@@ -9,7 +9,7 @@ type Config struct {
 	Store              StoreConfig     `yaml:"store"`
 	HTTP               HTTPConfig      `yaml:"http"`
 	Categories         []Category      `yaml:"categories"`
-	MaxMessagesPerTick int             `yaml:"max_messages_per_tick"` // max messages to process per tick (0 = unlimited)
+	MaxMessagesPerTick *int            `yaml:"max_messages_per_tick"` // max messages to process per tick (nil = use default, 0 = unlimited)
 }
 
 // LLMConfig defines the LLM provider configuration.

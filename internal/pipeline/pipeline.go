@@ -36,8 +36,8 @@ type Pipeline struct {
 	classifier   *classifier.Classifier
 	gmailFactory GmailClientFactory
 	config       *config.Config
-	categories   map[string]string           // category name -> label name mapping
-	aiLabelIDs   map[int64]map[string]bool   // account ID -> set of AI label IDs
+	categories   map[string]string         // category name -> label name mapping
+	aiLabelIDs   map[int64]map[string]bool // account ID -> set of AI label IDs
 	logger       *slog.Logger
 }
 
@@ -199,9 +199,10 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 	totalMessages := len(messageIDs)
 
 	// Apply max messages per tick throttle
-	maxMessages := p.config.MaxMessagesPerTick
-	if maxMessages == 0 {
-		maxMessages = DefaultMaxMessagesPerTick
+	// nil = use default, 0 = unlimited, >0 = limit
+	maxMessages := DefaultMaxMessagesPerTick
+	if p.config.MaxMessagesPerTick != nil {
+		maxMessages = *p.config.MaxMessagesPerTick
 	}
 	if maxMessages > 0 && len(messageIDs) > maxMessages {
 		messageIDs = messageIDs[:maxMessages]
@@ -280,12 +281,12 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 	)
 
 	// Check if message was already processed
-	skip, err := p.shouldSkipMessage(ctx, client, account, messageID)
+	skipReason, err := p.shouldSkipMessage(ctx, client, account, messageID)
 	if err != nil {
 		return err
 	}
-	if skip {
-		logger.Debug("message skipped", "reason", "already_processed")
+	if skipReason != SkipReasonNone {
+		logger.Debug("message skipped", "reason", string(skipReason))
 		return nil
 	}
 
@@ -301,7 +302,7 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 		// Use snippet as fallback
 		body = msg.Snippet
 	}
-	
+
 	// Clean the body (strip quoted replies, truncate)
 	body = gmail.CleanBody(body, 4000) // 4k chars max for LLM
 
@@ -397,31 +398,44 @@ func (c *storeLabelCache) ListLabels(accountID int64) ([]gmail.CachedLabel, erro
 	return result, nil
 }
 
+// SkipReason indicates why a message was skipped.
+type SkipReason string
+
+const (
+	// SkipReasonNone indicates the message should not be skipped.
+	SkipReasonNone SkipReason = ""
+	// SkipReasonAlreadyProcessed indicates the message is in the processed_messages table.
+	SkipReasonAlreadyProcessed SkipReason = "already_processed"
+	// SkipReasonHasAILabel indicates the message already has an AI/* label.
+	SkipReasonHasAILabel SkipReason = "has_ai_label"
+)
+
 // shouldSkipMessage checks if a message should be skipped.
-// Returns true if:
-// - Message is already in processed_messages table
-// - Message already has an AI/* label
-func (p *Pipeline) shouldSkipMessage(ctx context.Context, client *gmail.Client, account *store.Account, messageID string) (bool, error) {
+// Returns the skip reason if the message should be skipped:
+// - SkipReasonAlreadyProcessed: Message is in processed_messages table
+// - SkipReasonHasAILabel: Message already has an AI/* label
+// - SkipReasonNone: Message should be processed
+func (p *Pipeline) shouldSkipMessage(ctx context.Context, client *gmail.Client, account *store.Account, messageID string) (SkipReason, error) {
 	// Check if already processed in our store
 	exists, err := p.store.ProcessedMessageExists(account.ID, messageID)
 	if err != nil {
-		return false, err
+		return SkipReasonNone, err
 	}
 	if exists {
-		return true, nil
+		return SkipReasonAlreadyProcessed, nil
 	}
 
 	// Check if message already has an AI/* label
 	msg, err := client.GetMessage(ctx, messageID)
 	if err != nil {
-		return false, err
+		return SkipReasonNone, err
 	}
 
 	if p.hasAILabel(account.ID, msg) {
-		return true, nil
+		return SkipReasonHasAILabel, nil
 	}
 
-	return false, nil
+	return SkipReasonNone, nil
 }
 
 // hasAILabel checks if a message already has an AI/* label.

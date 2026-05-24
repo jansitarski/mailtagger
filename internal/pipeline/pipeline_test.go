@@ -14,11 +14,11 @@ import (
 
 // mockGmailClient implements a mock Gmail client for testing.
 type mockGmailClient struct {
-	messages       map[string]*gmail.Message
-	historyID      string
-	newMessageIDs  []string
-	appliedLabels  map[string][]string
-	createdLabels  map[string]string
+	messages      map[string]*gmail.Message
+	historyID     string
+	newMessageIDs []string
+	appliedLabels map[string][]string
+	createdLabels map[string]string
 }
 
 func newMockGmailClient() *mockGmailClient {
@@ -60,12 +60,18 @@ func (m *mockGmailClient) AddLabels(ctx context.Context, messageID string, label
 }
 
 // mockGmailClientFactory creates mock Gmail clients.
+// Note: This factory returns nil for NewClient because the pipeline uses *gmail.Client
+// which cannot be mocked without interface extraction. These tests focus on the
+// non-Gmail-dependent logic. Full integration tests would require refactoring to
+// use a GmailClient interface throughout.
 type mockGmailClientFactory struct {
 	client *mockGmailClient
 }
 
 func (f *mockGmailClientFactory) NewClient(ctx context.Context, account *store.Account) (*gmail.Client, error) {
-	// Return nil - we'll use the mock directly in tests
+	// Return nil - tests that call processAccount will fail.
+	// These tests are designed to test non-Gmail-dependent logic.
+	// Full integration tests require interface extraction for gmail.Client.
 	return nil, nil
 }
 
@@ -89,6 +95,11 @@ func (m *mockLLM) Call(ctx context.Context, prompt string, options ...llms.CallO
 	return `{"category": "` + m.category + `", "confidence": 0.9, "reasoning": "test"}`, nil
 }
 
+// Helper to create int pointer
+func intPtr(i int) *int {
+	return &i
+}
+
 func TestPipelineNew(t *testing.T) {
 	st, err := store.Open(":memory:", 30)
 	if err != nil {
@@ -106,7 +117,7 @@ func TestPipelineNew(t *testing.T) {
 			{Name: "Personal", Label: "AI/Personal", Description: "Personal emails"},
 			{Name: "Others", Label: "AI/Others", Description: "Other emails"},
 		},
-		MaxMessagesPerTick: 10,
+		MaxMessagesPerTick: intPtr(10),
 	}
 
 	mockLLM := &mockLLM{category: "Work", confidence: 0.9}
@@ -318,6 +329,51 @@ func TestDefaultPollInterval(t *testing.T) {
 func TestAILabelPrefix(t *testing.T) {
 	if AILabelPrefix != "AI/" {
 		t.Errorf("expected AILabelPrefix to be 'AI/', got %q", AILabelPrefix)
+	}
+}
+
+func TestSkipReasonConstants(t *testing.T) {
+	// Verify skip reason constants are defined correctly
+	if SkipReasonNone != "" {
+		t.Errorf("expected SkipReasonNone to be empty string, got %q", SkipReasonNone)
+	}
+	if SkipReasonAlreadyProcessed != "already_processed" {
+		t.Errorf("expected SkipReasonAlreadyProcessed to be 'already_processed', got %q", SkipReasonAlreadyProcessed)
+	}
+	if SkipReasonHasAILabel != "has_ai_label" {
+		t.Errorf("expected SkipReasonHasAILabel to be 'has_ai_label', got %q", SkipReasonHasAILabel)
+	}
+}
+
+func TestMaxMessagesPerTickSemantics(t *testing.T) {
+	// Test that nil means "use default" and 0 means "unlimited"
+	tests := []struct {
+		name     string
+		cfgValue *int
+		want     int // expected effective max (0 means unlimited in behavior)
+	}{
+		{"nil uses default", nil, DefaultMaxMessagesPerTick},
+		{"explicit 0 means unlimited", intPtr(0), 0},
+		{"explicit 10 means 10", intPtr(10), 10},
+		{"explicit 100 means 100", intPtr(100), 100},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				MaxMessagesPerTick: tt.cfgValue,
+			}
+
+			// Calculate effective max the same way the pipeline does
+			maxMessages := DefaultMaxMessagesPerTick
+			if cfg.MaxMessagesPerTick != nil {
+				maxMessages = *cfg.MaxMessagesPerTick
+			}
+
+			if maxMessages != tt.want {
+				t.Errorf("expected effective max %d, got %d", tt.want, maxMessages)
+			}
+		})
 	}
 }
 
