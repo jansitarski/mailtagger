@@ -73,7 +73,11 @@ func (c *Client) RateLimiter() *RateLimiter {
 }
 
 // SetRateLimiter allows replacing the default rate limiter with a custom one.
+// If rl is nil, the default rate limiter configuration is used.
 func (c *Client) SetRateLimiter(rl *RateLimiter) {
+	if rl == nil {
+		rl = NewRateLimiter(DefaultRateLimiterConfig())
+	}
 	c.rateLimiter = rl
 }
 

@@ -2,9 +2,11 @@ package gmail
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -114,13 +116,15 @@ func (rl *RateLimiter) Do(ctx context.Context, f func() error) error {
 
 // isRetryable determines if an error should trigger a retry.
 // Returns true for 429 (rate limit) and 5xx (server) errors.
+// Uses errors.As to detect *googleapi.Error through wrapped errors.
 func (rl *RateLimiter) isRetryable(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// Check for googleapi.Error
-	if apiErr, ok := err.(*googleapi.Error); ok {
+	// Check for googleapi.Error (supports wrapped errors)
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
 		// 429 - Too Many Requests (rate limit)
 		if apiErr.Code == http.StatusTooManyRequests {
 			return true
@@ -135,21 +139,31 @@ func (rl *RateLimiter) isRetryable(err error) bool {
 }
 
 // calculateBackoff calculates the delay before the next retry.
-// Uses exponential backoff with jitter. If the error includes a Retry-After
-// header, that value is respected.
+// Uses exponential backoff. If the error includes a Retry-After header,
+// that value is respected (supports delta-seconds format).
 func (rl *RateLimiter) calculateBackoff(attempt int, err error) time.Duration {
 	// Check for Retry-After header in the error
-	if apiErr, ok := err.(*googleapi.Error); ok {
-		for _, header := range apiErr.Header {
-			if len(header) > 0 {
-				// Try to parse Retry-After as seconds
-				if retryAfter, parseErr := time.ParseDuration(header[0] + "s"); parseErr == nil {
-					// Cap at maxDelay
-					if retryAfter > rl.maxDelay {
-						return rl.maxDelay
-					}
-					return retryAfter
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
+		if retryAfter := apiErr.Header.Get("Retry-After"); retryAfter != "" {
+			// Try to parse as delta-seconds (e.g., "120")
+			if seconds, parseErr := strconv.Atoi(retryAfter); parseErr == nil && seconds > 0 {
+				delay := time.Duration(seconds) * time.Second
+				if delay > rl.maxDelay {
+					return rl.maxDelay
 				}
+				return delay
+			}
+			// Try to parse as HTTP-date (e.g., "Sun, 24 May 2026 16:00:00 GMT")
+			if t, parseErr := http.ParseTime(retryAfter); parseErr == nil {
+				delay := time.Until(t)
+				if delay <= 0 {
+					delay = rl.baseDelay
+				}
+				if delay > rl.maxDelay {
+					return rl.maxDelay
+				}
+				return delay
 			}
 		}
 	}

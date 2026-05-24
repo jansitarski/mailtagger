@@ -108,14 +108,15 @@ func (c *Client) AddLabels(ctx context.Context, messageID string, labelIDs []str
 		AddLabelIds: labelIDs,
 	}
 
-	// Execute with rate limiting and retry
-	return c.rateLimiter.Do(ctx, func() error {
-		_, err := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("failed to add labels to message %s: %w", messageID, err)
-		}
-		return nil
+	// Execute with rate limiting and retry - return raw API error for retry detection
+	err := c.rateLimiter.Do(ctx, func() error {
+		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+		return apiErr
 	})
+	if err != nil {
+		return fmt.Errorf("failed to add labels to message %s: %w", messageID, err)
+	}
+	return nil
 }
 
 // RemoveLabels removes one or more labels from a message.
@@ -133,14 +134,15 @@ func (c *Client) RemoveLabels(ctx context.Context, messageID string, labelIDs []
 		RemoveLabelIds: labelIDs,
 	}
 
-	// Execute with rate limiting and retry
-	return c.rateLimiter.Do(ctx, func() error {
-		_, err := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("failed to remove labels from message %s: %w", messageID, err)
-		}
-		return nil
+	// Execute with rate limiting and retry - return raw API error for retry detection
+	err := c.rateLimiter.Do(ctx, func() error {
+		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+		return apiErr
 	})
+	if err != nil {
+		return fmt.Errorf("failed to remove labels from message %s: %w", messageID, err)
+	}
+	return nil
 }
 
 // ModifyLabels adds and/or removes labels from a message in a single operation.
@@ -159,12 +161,13 @@ func (c *Client) ModifyLabels(ctx context.Context, messageID string, addLabelIDs
 		RemoveLabelIds: removeLabelIDs,
 	}
 
-	// Execute with rate limiting and retry
-	return c.rateLimiter.Do(ctx, func() error {
-		_, err := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
-		if err != nil {
-			return fmt.Errorf("failed to modify labels for message %s: %w", messageID, err)
-		}
-		return nil
+	// Execute with rate limiting and retry - return raw API error for retry detection
+	err := c.rateLimiter.Do(ctx, func() error {
+		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+		return apiErr
 	})
+	if err != nil {
+		return fmt.Errorf("failed to modify labels for message %s: %w", messageID, err)
+	}
+	return nil
 }

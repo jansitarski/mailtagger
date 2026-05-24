@@ -3,6 +3,7 @@ package gmail
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -376,11 +377,149 @@ func TestRateLimiter_SetRate(t *testing.T) {
 	// Set new rate
 	rl.SetRate(20.0, 40)
 
-	// The rate limiter should now allow 40 requests in burst
+	// Assert the limiter state directly instead of making time-based Wait calls
+	if rl.limiter.Limit() != 20.0 {
+		t.Errorf("expected limit=20.0, got %f", rl.limiter.Limit())
+	}
+	if rl.limiter.Burst() != 40 {
+		t.Errorf("expected burst=40, got %d", rl.limiter.Burst())
+	}
+}
+
+func TestRateLimiter_isRetryable_WrappedError(t *testing.T) {
+	rl := NewRateLimiter(DefaultRateLimiterConfig())
+
+	// Wrap a 429 error with fmt.Errorf %w
+	apiErr := &googleapi.Error{Code: http.StatusTooManyRequests}
+	wrapped := fmt.Errorf("context: %w", apiErr)
+
+	if !rl.isRetryable(wrapped) {
+		t.Error("expected wrapped 429 error to be retryable")
+	}
+
+	// Wrap a 500 error with fmt.Errorf %w
+	serverErr := &googleapi.Error{Code: http.StatusInternalServerError}
+	wrappedServer := fmt.Errorf("something failed: %w", serverErr)
+
+	if !rl.isRetryable(wrappedServer) {
+		t.Error("expected wrapped 500 error to be retryable")
+	}
+
+	// Wrap a 400 error - should NOT be retryable
+	badReq := &googleapi.Error{Code: http.StatusBadRequest}
+	wrappedBadReq := fmt.Errorf("bad: %w", badReq)
+
+	if rl.isRetryable(wrappedBadReq) {
+		t.Error("expected wrapped 400 error to NOT be retryable")
+	}
+}
+
+func TestRateLimiter_Do_RetryWrappedError(t *testing.T) {
+	config := RateLimiterConfig{
+		RequestsPerSecond: 1000.0,
+		Burst:             10,
+		MaxRetries:        3,
+		BaseDelay:         1 * time.Millisecond,
+		MaxDelay:          1 * time.Second,
+		BackoffFactor:     2.0,
+	}
+
+	rl := NewRateLimiter(config)
 	ctx := context.Background()
-	for i := 0; i < 40; i++ {
-		if err := rl.Wait(ctx); err != nil {
-			t.Errorf("unexpected error on request %d: %v", i, err)
+
+	callCount := 0
+	// Even though the raw error is returned (not wrapped), verify the flow works
+	err429 := &googleapi.Error{
+		Code:    http.StatusTooManyRequests,
+		Message: "rate limit exceeded",
+	}
+
+	err := rl.Do(ctx, func() error {
+		callCount++
+		if callCount < 2 {
+			return err429
 		}
+		return nil
+	})
+
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 calls, got %d", callCount)
+	}
+}
+
+func TestRateLimiter_calculateBackoff_RetryAfterSeconds(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		RequestsPerSecond: 10.0,
+		Burst:             20,
+		MaxRetries:        5,
+		BaseDelay:         1 * time.Second,
+		MaxDelay:          60 * time.Second,
+		BackoffFactor:     2.0,
+	})
+
+	// Create error with Retry-After header (delta-seconds)
+	header := make(http.Header)
+	header.Set("Retry-After", "30")
+	apiErr := &googleapi.Error{
+		Code:   http.StatusTooManyRequests,
+		Header: header,
+	}
+
+	delay := rl.calculateBackoff(0, apiErr)
+	if delay != 30*time.Second {
+		t.Errorf("expected 30s from Retry-After, got %v", delay)
+	}
+}
+
+func TestRateLimiter_calculateBackoff_RetryAfterCapped(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		RequestsPerSecond: 10.0,
+		Burst:             20,
+		MaxRetries:        5,
+		BaseDelay:         1 * time.Second,
+		MaxDelay:          10 * time.Second, // Low max
+		BackoffFactor:     2.0,
+	})
+
+	// Retry-After value exceeds maxDelay
+	header := make(http.Header)
+	header.Set("Retry-After", "120")
+	apiErr := &googleapi.Error{
+		Code:   http.StatusTooManyRequests,
+		Header: header,
+	}
+
+	delay := rl.calculateBackoff(0, apiErr)
+	if delay != 10*time.Second {
+		t.Errorf("expected Retry-After to be capped at maxDelay=10s, got %v", delay)
+	}
+}
+
+func TestRateLimiter_calculateBackoff_RetryAfterHTTPDate(t *testing.T) {
+	rl := NewRateLimiter(RateLimiterConfig{
+		RequestsPerSecond: 10.0,
+		Burst:             20,
+		MaxRetries:        5,
+		BaseDelay:         1 * time.Second,
+		MaxDelay:          60 * time.Second,
+		BackoffFactor:     2.0,
+	})
+
+	// Create error with Retry-After header (HTTP-date format)
+	futureTime := time.Now().Add(5 * time.Second)
+	header := make(http.Header)
+	header.Set("Retry-After", futureTime.UTC().Format(http.TimeFormat))
+	apiErr := &googleapi.Error{
+		Code:   http.StatusTooManyRequests,
+		Header: header,
+	}
+
+	delay := rl.calculateBackoff(0, apiErr)
+	// Should be approximately 5 seconds (within tolerance for test execution time)
+	if delay < 4*time.Second || delay > 6*time.Second {
+		t.Errorf("expected ~5s from Retry-After HTTP-date, got %v", delay)
 	}
 }
