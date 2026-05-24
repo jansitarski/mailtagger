@@ -9,6 +9,9 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
+// FallbackCategory is the default category used when LLM returns an unknown category.
+const FallbackCategory = "Others"
+
 // Email represents an email message to be classified.
 type Email struct {
 	ID      string // unique message identifier
@@ -76,5 +79,19 @@ func (c *Classifier) Classify(ctx context.Context, email Email) (*Decision, erro
 		return nil, fmt.Errorf("parse LLM response: %w", err)
 	}
 
+	// Validate the category
+	decision.Category = c.validateCategory(decision.Category)
+
 	return &decision, nil
+}
+
+// validateCategory checks if the category is valid and returns the fallback if not.
+func (c *Classifier) validateCategory(category string) string {
+	for _, cat := range c.categories {
+		if cat.Name == category {
+			return category
+		}
+	}
+	// Hallucinated category, use fallback
+	return FallbackCategory
 }
