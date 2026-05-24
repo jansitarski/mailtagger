@@ -190,8 +190,7 @@ func (p *Pipeline) fetchNewMessageIDs(ctx context.Context, client *gmail.Client,
 	return result.MessageIDs, result.NextHistoryID, nil
 }
 
-// processMessage processes a single message. This is a placeholder that will
-// be implemented in task 5 with the full pipeline (classify, label, record).
+// processMessage processes a single message: fetch -> classify -> label -> record.
 func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, account *store.Account, messageID string) error {
 	// Check if message was already processed
 	skip, err := p.shouldSkipMessage(ctx, client, account, messageID)
@@ -202,8 +201,96 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 		return nil
 	}
 
-	// Will be implemented in task mailtagger-6zk.5
+	// 1. Fetch the full message
+	msg, err := client.GetMessage(ctx, messageID)
+	if err != nil {
+		return err
+	}
+
+	// 2. Extract the body for classification
+	body, err := gmail.ExtractBody(msg.RawMessage)
+	if err != nil {
+		// Use snippet as fallback
+		body = msg.Snippet
+	}
+	
+	// Clean the body (strip quoted replies, truncate)
+	body = gmail.CleanBody(body, 4000) // 4k chars max for LLM
+
+	// 3. Classify the email
+	email := classifier.Email{
+		ID:      messageID,
+		From:    msg.From,
+		Subject: msg.Subject,
+		Body:    body,
+	}
+
+	decision, err := p.classifier.Classify(ctx, email)
+	if err != nil {
+		return err
+	}
+
+	// 4. Get the label for the category
+	labelName := p.GetLabelForCategory(decision.Category)
+	if labelName == "" {
+		// No label configured for this category, skip labeling
+		// but still record as processed
+		if err := p.store.InsertProcessedMessage(account.ID, messageID); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// 5. Get or create the Gmail label
+	labelManager := gmail.NewLabelManager(client, &storeLabelCache{store: p.store}, account.ID)
+	labelID, err := labelManager.GetOrCreateLabel(ctx, labelName)
+	if err != nil {
+		return err
+	}
+
+	// 6. Apply the label to the message
+	if err := client.AddLabels(ctx, messageID, []string{labelID}); err != nil {
+		return err
+	}
+
+	// 7. Record the message as processed
+	if err := p.store.InsertProcessedMessage(account.ID, messageID); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// storeLabelCache adapts store.Store to gmail.LabelCache interface.
+type storeLabelCache struct {
+	store *store.Store
+}
+
+func (c *storeLabelCache) GetLabel(accountID int64, labelName string) (string, error) {
+	label, err := c.store.GetLabel(accountID, labelName)
+	if err != nil {
+		return "", err
+	}
+	return label.LabelID, nil
+}
+
+func (c *storeLabelCache) UpsertLabel(accountID int64, labelName, labelID string) error {
+	return c.store.UpsertLabel(accountID, labelName, labelID)
+}
+
+func (c *storeLabelCache) ListLabels(accountID int64) ([]gmail.CachedLabel, error) {
+	labels, err := c.store.ListLabels(accountID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]gmail.CachedLabel, len(labels))
+	for i, l := range labels {
+		result[i] = gmail.CachedLabel{
+			Name: l.LabelName,
+			ID:   l.LabelID,
+		}
+	}
+	return result, nil
 }
 
 // shouldSkipMessage checks if a message should be skipped.
