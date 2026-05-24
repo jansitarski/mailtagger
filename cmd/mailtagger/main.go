@@ -162,13 +162,28 @@ It prints an authorization URL and prompts for the redirect URL after consent.`,
 }
 
 func runAuth(accountID, clientSecretPath string) error {
-	slog.Info("auth command placeholder", "account", accountID, "client_secret", clientSecretPath)
+	// Validate account ID
+	if accountID == "" {
+		return fmt.Errorf("account ID cannot be empty")
+	}
+
+	// Validate client secret file exists
+	if _, err := os.Stat(clientSecretPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("client_secret.json file not found: %s", clientSecretPath)
+		}
+		return fmt.Errorf("failed to access client_secret.json: %w", err)
+	}
+
+	slog.Info("starting OAuth authentication", "account", accountID, "client_secret", clientSecretPath)
+
+	// TODO: Parse client_secret.json (mailtagger-dg2.2)
+	// TODO: Generate OAuth URL (mailtagger-dg2.3)
+	// TODO: Start local callback server or manual paste fallback (mailtagger-dg2.4, dg2.5)
+	// TODO: Exchange auth code for tokens (mailtagger-dg2.6)
+	// TODO: Print success message (mailtagger-dg2.7)
+
 	fmt.Println("OAuth authentication flow not yet implemented.")
-	fmt.Println("This will:")
-	fmt.Println("  1. Read OAuth credentials from", clientSecretPath)
-	fmt.Println("  2. Generate an authorization URL")
-	fmt.Println("  3. Prompt you to paste the redirect URL after consent")
-	fmt.Println("  4. Exchange the code for tokens and store them")
 	return nil
 }
 
