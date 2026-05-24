@@ -3,6 +3,7 @@ package pipeline
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -35,8 +36,9 @@ type Pipeline struct {
 	classifier   *classifier.Classifier
 	gmailFactory GmailClientFactory
 	config       *config.Config
-	categories   map[string]string // category name -> label name mapping
-	aiLabelIDs   map[int64]map[string]bool // account ID -> set of AI label IDs
+	categories   map[string]string           // category name -> label name mapping
+	aiLabelIDs   map[int64]map[string]bool   // account ID -> set of AI label IDs
+	logger       *slog.Logger
 }
 
 // New creates a new Pipeline with the given dependencies.
@@ -59,7 +61,14 @@ func New(
 		config:       cfg,
 		categories:   categories,
 		aiLabelIDs:   make(map[int64]map[string]bool),
+		logger:       slog.Default(),
 	}
+}
+
+// WithLogger sets a custom logger for the pipeline.
+func (p *Pipeline) WithLogger(logger *slog.Logger) *Pipeline {
+	p.logger = logger
+	return p
 }
 
 // Store returns the store instance.
@@ -95,23 +104,24 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 	}
 
+	p.logger.Info("pipeline starting", "poll_interval", pollInterval)
+
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
 	// Run once immediately on startup
 	if err := p.tick(ctx); err != nil {
-		// Log error but continue - don't fail on first tick error
-		_ = err
+		p.logger.Error("tick failed", "error", err)
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
+			p.logger.Info("pipeline stopping", "reason", ctx.Err())
 			return nil
 		case <-ticker.C:
 			if err := p.tick(ctx); err != nil {
-				// Log error but continue polling
-				_ = err
+				p.logger.Error("tick failed", "error", err)
 			}
 		}
 	}
@@ -128,11 +138,15 @@ func (p *Pipeline) tick(ctx context.Context) error {
 	default:
 	}
 
+	tickStart := time.Now()
+
 	// Get all accounts from store
 	accounts, err := p.store.ListAccounts()
 	if err != nil {
 		return err
 	}
+
+	p.logger.Debug("tick starting", "account_count", len(accounts))
 
 	// Process each account
 	for _, account := range accounts {
@@ -144,11 +158,15 @@ func (p *Pipeline) tick(ctx context.Context) error {
 		}
 
 		if err := p.processAccount(ctx, account); err != nil {
-			// Log error but continue with other accounts
-			_ = err
+			p.logger.Error("account processing failed",
+				"account_id", account.ID,
+				"account_email", account.Email,
+				"error", err)
 			continue
 		}
 	}
+
+	p.logger.Debug("tick completed", "latency_ms", time.Since(tickStart).Milliseconds())
 
 	return nil
 }
@@ -164,6 +182,8 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 	default:
 	}
 
+	logger := p.logger.With("account_id", account.ID, "account_email", account.Email)
+
 	// Create Gmail client for this account
 	client, err := p.gmailFactory.NewClient(ctx, account)
 	if err != nil {
@@ -176,6 +196,8 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 		return err
 	}
 
+	totalMessages := len(messageIDs)
+
 	// Apply max messages per tick throttle
 	maxMessages := p.config.MaxMessagesPerTick
 	if maxMessages == 0 {
@@ -183,6 +205,14 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 	}
 	if maxMessages > 0 && len(messageIDs) > maxMessages {
 		messageIDs = messageIDs[:maxMessages]
+		logger.Warn("throttling messages",
+			"total_messages", totalMessages,
+			"processing", len(messageIDs),
+			"max_per_tick", maxMessages)
+	}
+
+	if len(messageIDs) > 0 {
+		logger.Info("processing messages", "message_count", len(messageIDs))
 	}
 
 	// Track how many messages were processed for this tick
@@ -195,13 +225,15 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 			if newHistoryID != "" && newHistoryID != account.HistoryID {
 				_ = p.store.UpdateHistoryID(account.ID, newHistoryID)
 			}
+			logger.Info("graceful shutdown", "processed", processed)
 			return ctx.Err()
 		default:
 		}
 
 		if err := p.processMessage(ctx, client, account, msgID); err != nil {
-			// Log error but continue with other messages
-			_ = err
+			logger.Error("message processing failed",
+				"message_id", msgID,
+				"error", err)
 			continue
 		}
 		processed++
@@ -241,12 +273,19 @@ func (p *Pipeline) fetchNewMessageIDs(ctx context.Context, client *gmail.Client,
 
 // processMessage processes a single message: fetch -> classify -> label -> record.
 func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, account *store.Account, messageID string) error {
+	start := time.Now()
+	logger := p.logger.With(
+		"account_id", account.ID,
+		"message_id", messageID,
+	)
+
 	// Check if message was already processed
 	skip, err := p.shouldSkipMessage(ctx, client, account, messageID)
 	if err != nil {
 		return err
 	}
 	if skip {
+		logger.Debug("message skipped", "reason", "already_processed")
 		return nil
 	}
 
@@ -267,6 +306,7 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 	body = gmail.CleanBody(body, 4000) // 4k chars max for LLM
 
 	// 3. Classify the email
+	classifyStart := time.Now()
 	email := classifier.Email{
 		ID:      messageID,
 		From:    msg.From,
@@ -278,6 +318,7 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 	if err != nil {
 		return err
 	}
+	classifyLatency := time.Since(classifyStart)
 
 	// 4. Get the label for the category
 	labelName := p.GetLabelForCategory(decision.Category)
@@ -287,6 +328,12 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 		if err := p.store.InsertProcessedMessage(account.ID, messageID); err != nil {
 			return err
 		}
+		logger.Info("message classified (no label)",
+			"category", decision.Category,
+			"confidence", decision.Confidence,
+			"classify_latency_ms", classifyLatency.Milliseconds(),
+			"total_latency_ms", time.Since(start).Milliseconds(),
+		)
 		return nil
 	}
 
@@ -306,6 +353,14 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 	if err := p.store.InsertProcessedMessage(account.ID, messageID); err != nil {
 		return err
 	}
+
+	logger.Info("message classified",
+		"category", decision.Category,
+		"confidence", decision.Confidence,
+		"label", labelName,
+		"classify_latency_ms", classifyLatency.Milliseconds(),
+		"total_latency_ms", time.Since(start).Milliseconds(),
+	)
 
 	return nil
 }
