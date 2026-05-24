@@ -96,10 +96,10 @@ func (p *Pipeline) GetLabelForCategory(category string) string {
 // interval and processes them. The loop runs until the context is cancelled.
 // Returns nil when stopped via context cancellation.
 func (p *Pipeline) Run(ctx context.Context) error {
-	// Determine poll interval from first account's config, or use default
+	// Determine poll interval from config, or use default
 	pollInterval := DefaultPollInterval
-	if len(p.config.Accounts) > 0 && p.config.Accounts[0].PollInterval != "" {
-		if d, err := time.ParseDuration(p.config.Accounts[0].PollInterval); err == nil {
+	if p.config.PollInterval != "" {
+		if d, err := time.ParseDuration(p.config.PollInterval); err == nil {
 			pollInterval = d
 		}
 	}
