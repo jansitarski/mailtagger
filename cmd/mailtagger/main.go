@@ -144,7 +144,6 @@ func runServe(ctx context.Context, configPath, addrOverride string) error {
 }
 
 func newAuthCmd() *cobra.Command {
-	var accountID string
 	var clientSecretPath string
 	var dbPath string
 	var encryptionKeyHex string
@@ -156,10 +155,12 @@ func newAuthCmd() *cobra.Command {
 		Short: "Authenticate a Gmail account (headless fallback)",
 		Long: `Performs OAuth authentication for a Gmail account via CLI.
 This is the headless fallback when the web setup wizard is not accessible.
-It prints an authorization URL and prompts for the redirect URL after consent.`,
+It prints an authorization URL and prompts for the redirect URL after consent.
+
+The account is identified by the email address obtained from Google during
+authentication and is stored in the database keyed by that email.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runAuth(cmd.Context(), authConfig{
-				accountID:        accountID,
 				clientSecretPath: clientSecretPath,
 				dbPath:           dbPath,
 				encryptionKeyHex: encryptionKeyHex,
@@ -169,7 +170,6 @@ It prints an authorization URL and prompts for the redirect URL after consent.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&accountID, "account", "primary", "account ID to authenticate")
 	cmd.Flags().StringVar(&clientSecretPath, "client-secret", "", "path to OAuth client_secret.json file")
 	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/mailtagger/state.db", "path to SQLite database")
 	cmd.Flags().StringVar(&encryptionKeyHex, "encryption-key", "", "32-byte encryption key in hex (64 chars), or use MAILTAGGER_ENCRYPTION_KEY env var")
@@ -181,7 +181,6 @@ It prints an authorization URL and prompts for the redirect URL after consent.`,
 }
 
 type authConfig struct {
-	accountID        string
 	clientSecretPath string
 	dbPath           string
 	encryptionKeyHex string
@@ -190,11 +189,6 @@ type authConfig struct {
 }
 
 func runAuth(ctx context.Context, cfg authConfig) error {
-	// Validate account ID
-	if cfg.accountID == "" {
-		return fmt.Errorf("account ID cannot be empty")
-	}
-
 	// Validate client secret file exists
 	if _, err := os.Stat(cfg.clientSecretPath); err != nil {
 		if os.IsNotExist(err) {
@@ -211,7 +205,6 @@ func runAuth(ctx context.Context, cfg authConfig) error {
 
 	fmt.Println("mailtagger OAuth Authentication")
 	fmt.Println("================================")
-	fmt.Printf("Account: %s\n", cfg.accountID)
 	fmt.Println()
 
 	// Parse client secret
@@ -228,17 +221,15 @@ func runAuth(ctx context.Context, cfg authConfig) error {
 
 	// Determine redirect URI and auth code acquisition method
 	var authCode string
-	var oauthConfig = clientSecret.OAuthConfig("http://127.0.0.1/")
+	var redirectURI string
 
 	if cfg.manual {
-		// Manual paste flow
+		// Manual paste flow - use out-of-band redirect
 		fmt.Println("Using manual paste flow.")
 		fmt.Println()
 
-		// Use out-of-band redirect for manual flow
-		redirectURI := "urn:ietf:wg:oauth:2.0:oob"
-		oauthConfig = clientSecret.OAuthConfig(redirectURI)
-		authURL := oauthConfig.AuthCodeURL(state)
+		redirectURI = "urn:ietf:wg:oauth:2.0:oob"
+		authURL := clientSecret.AuthCodeURL(redirectURI, state)
 
 		fmt.Println("1. Open this URL in your browser:")
 		fmt.Println()
@@ -258,9 +249,8 @@ func runAuth(ctx context.Context, cfg authConfig) error {
 			return fmt.Errorf("failed to start callback server: %w", err)
 		}
 
-		redirectURI := callbackServer.RedirectURL()
-		oauthConfig = clientSecret.OAuthConfig(redirectURI)
-		authURL := oauthConfig.AuthCodeURL(state)
+		redirectURI = callbackServer.RedirectURL()
+		authURL := clientSecret.AuthCodeURL(redirectURI, state)
 
 		fmt.Println("1. Open this URL in your browser:")
 		fmt.Println()
@@ -301,7 +291,8 @@ func runAuth(ctx context.Context, cfg authConfig) error {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
 
-	// Exchange code for tokens
+	// Exchange code for tokens using the same redirect URI
+	oauthConfig := clientSecret.OAuthConfig(redirectURI)
 	exchanger := auth.NewTokenExchanger(oauthConfig, st, encryptionKey)
 	result, err := exchanger.Exchange(ctx, authCode)
 	if err != nil {

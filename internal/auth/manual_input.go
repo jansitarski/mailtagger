@@ -47,7 +47,10 @@ func ParseCallbackURL(rawURL, expectedState string) (CallbackResult, error) {
 		if strings.Contains(rawURL, "=") {
 			rawURL = "http://localhost/?" + strings.TrimPrefix(rawURL, "?")
 		} else {
-			// Assume it's just the code
+			// Assume it's just the code - only allow this if no state validation is required
+			if expectedState != "" {
+				return CallbackResult{}, errors.New("state validation required; please paste the full redirect URL, not just the code")
+			}
 			return CallbackResult{Code: rawURL}, nil
 		}
 	}

@@ -106,13 +106,24 @@ func TestParseCallbackURL_QueryWithQuestionMark(t *testing.T) {
 }
 
 func TestParseCallbackURL_JustCode(t *testing.T) {
-	// User might paste just the code
+	// User might paste just the code - only allowed when no state expected
 	result, err := ParseCallbackURL("4/0AfJohXkABC123...", "")
 	if err != nil {
 		t.Fatalf("ParseCallbackURL() error = %v", err)
 	}
 	if result.Code != "4/0AfJohXkABC123..." {
 		t.Errorf("Code = %q, want %q", result.Code, "4/0AfJohXkABC123...")
+	}
+}
+
+func TestParseCallbackURL_JustCodeWithStateRequired(t *testing.T) {
+	// When state is required, pasting just the code should fail
+	_, err := ParseCallbackURL("4/0AfJohXkABC123...", "expected-state")
+	if err == nil {
+		t.Fatal("ParseCallbackURL() expected error when state required but code-only pasted")
+	}
+	if !strings.Contains(err.Error(), "state validation required") {
+		t.Errorf("error = %q, want containing 'state validation required'", err.Error())
 	}
 }
 

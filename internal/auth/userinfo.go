@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -22,7 +23,9 @@ type UserInfo struct {
 
 // GetUserInfo retrieves the user's information from Google using the OAuth token.
 func GetUserInfo(ctx context.Context, token *oauth2.Token) (*UserInfo, error) {
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "GET", userinfoURL, nil)
 	if err != nil {

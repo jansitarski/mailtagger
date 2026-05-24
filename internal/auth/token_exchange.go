@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"golang.org/x/oauth2"
@@ -42,12 +43,18 @@ type ExchangeResult struct {
 }
 
 // Exchange exchanges the authorization code for tokens and stores them.
-// It returns the email address from the token's ID token claims.
+// It retrieves the user's email from Google's userinfo API and stores the
+// encrypted token in the database, keyed by email address.
 func (e *TokenExchanger) Exchange(ctx context.Context, code string) (*ExchangeResult, error) {
 	// Exchange code for token
 	token, err := e.config.Exchange(ctx, code)
 	if err != nil {
 		return nil, fmt.Errorf("failed to exchange code: %w", err)
+	}
+
+	// Validate that we received a refresh token (required for offline access)
+	if token.RefreshToken == "" {
+		return nil, fmt.Errorf("no refresh token received; ensure OAuth URL uses access_type=offline and prompt=consent")
 	}
 
 	// Get email from userinfo API
@@ -83,7 +90,7 @@ func (e *TokenExchanger) Exchange(ctx context.Context, code string) (*ExchangeRe
 		}
 		result.AccountID = existing.ID
 		result.IsNewToken = false
-	} else if err == store.ErrAccountNotFound {
+	} else if errors.Is(err, store.ErrAccountNotFound) {
 		// Insert new account
 		acc, err := e.store.InsertAccount(email, encrypted)
 		if err != nil {

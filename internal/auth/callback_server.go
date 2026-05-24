@@ -16,6 +16,9 @@ var ErrAuthTimeout = errors.New("authorization timed out")
 // ErrAuthCanceled is returned when the authorization flow is canceled.
 var ErrAuthCanceled = errors.New("authorization canceled")
 
+// ErrServerFailed is returned when the callback server fails to start or serve.
+var ErrServerFailed = errors.New("callback server failed")
+
 // CallbackResult contains the result of an OAuth callback.
 type CallbackResult struct {
 	Code  string // The authorization code
@@ -25,11 +28,12 @@ type CallbackResult struct {
 
 // CallbackServer listens on a local port for the OAuth callback redirect.
 type CallbackServer struct {
-	listener net.Listener
-	server   *http.Server
-	result   chan CallbackResult
-	mu       sync.Mutex
-	closed   bool
+	listener  net.Listener
+	server    *http.Server
+	result    chan CallbackResult
+	serverErr chan error
+	mu        sync.Mutex
+	closed    bool
 }
 
 // NewCallbackServer creates a new callback server listening on a random available port.
@@ -42,8 +46,9 @@ func NewCallbackServer() (*CallbackServer, error) {
 	}
 
 	cs := &CallbackServer{
-		listener: listener,
-		result:   make(chan CallbackResult, 1),
+		listener:  listener,
+		result:    make(chan CallbackResult, 1),
+		serverErr: make(chan error, 1),
 	}
 
 	mux := http.NewServeMux()
@@ -129,17 +134,22 @@ func (cs *CallbackServer) WaitForCallback(ctx context.Context, timeout time.Dura
 	// Start serving in background
 	go func() {
 		if err := cs.server.Serve(cs.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			// Log error but don't block
+			select {
+			case cs.serverErr <- err:
+			default:
+			}
 		}
 	}()
 
 	// Ensure cleanup
 	defer cs.Close()
 
-	// Wait for result or timeout
+	// Wait for result, server error, or timeout
 	select {
 	case result := <-cs.result:
 		return result, nil
+	case err := <-cs.serverErr:
+		return CallbackResult{}, fmt.Errorf("%w: %v", ErrServerFailed, err)
 	case <-ctx.Done():
 		return CallbackResult{}, ErrAuthCanceled
 	case <-time.After(timeout):
