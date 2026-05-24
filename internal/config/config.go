@@ -4,12 +4,12 @@ import "time"
 
 // Config is the top-level configuration structure for mailtagger.
 type Config struct {
-	LLM                LLMConfig       `yaml:"llm"`
-	Accounts           []AccountConfig `yaml:"accounts"`
-	Store              StoreConfig     `yaml:"store"`
-	HTTP               HTTPConfig      `yaml:"http"`
-	Categories         []Category      `yaml:"categories"`
-	MaxMessagesPerTick *int            `yaml:"max_messages_per_tick"` // max messages to process per tick (nil = use default, 0 = unlimited)
+	LLM                LLMConfig    `yaml:"llm"`
+	Store              StoreConfig  `yaml:"store"`
+	HTTP               HTTPConfig   `yaml:"http"`
+	Categories         []Category   `yaml:"categories"`
+	PollInterval       string       `yaml:"poll_interval"`         // e.g., "5m", parsed as time.Duration
+	MaxMessagesPerTick *int         `yaml:"max_messages_per_tick"` // max messages to process per tick (nil = use default, 0 = unlimited)
 }
 
 // LLMConfig defines the LLM provider configuration.
@@ -22,16 +22,6 @@ type LLMConfig struct {
 	MaxTokens    int     `yaml:"max_tokens"`    // max response tokens
 	Timeout      string  `yaml:"timeout"`       // e.g., "30s", parsed as time.Duration
 	SystemPrompt string  `yaml:"system_prompt"` // optional, custom system prompt template
-}
-
-// AccountConfig defines a Gmail account to monitor.
-type AccountConfig struct {
-	ID               string `yaml:"id"`                  // unique account identifier
-	Email            string `yaml:"email"`               // Gmail address
-	ClientSecretPath string `yaml:"client_secret_path"`  // path to OAuth client_secret.json
-	TokenPath        string `yaml:"token_path"`          // path to store OAuth tokens
-	PollInterval     string `yaml:"poll_interval"`       // e.g., "5m", parsed as time.Duration
-	Query            string `yaml:"query"`               // Gmail search query filter
 }
 
 // StoreConfig defines the state storage backend.
@@ -50,15 +40,15 @@ type HTTPConfig struct {
 
 // Category defines a classification category and its Gmail label.
 type Category struct {
-	Name        string `yaml:"name"`         // unique category name
-	Label       string `yaml:"label"`        // Gmail label to apply
-	Description string `yaml:"description"`  // description for the LLM classifier
+	Name        string `yaml:"name"`        // unique category name
+	Label       string `yaml:"label"`       // Gmail label to apply
+	Description string `yaml:"description"` // description for the LLM classifier
 }
 
 // ParsedDurations provides parsed time.Duration values for string fields.
 func (c *Config) ParsedDurations() (map[string]time.Duration, error) {
 	durations := make(map[string]time.Duration)
-	
+
 	if c.LLM.Timeout != "" {
 		d, err := time.ParseDuration(c.LLM.Timeout)
 		if err != nil {
@@ -66,17 +56,15 @@ func (c *Config) ParsedDurations() (map[string]time.Duration, error) {
 		}
 		durations["llm.timeout"] = d
 	}
-	
-	for _, acc := range c.Accounts {
-		if acc.PollInterval != "" {
-			d, err := time.ParseDuration(acc.PollInterval)
-			if err != nil {
-				return nil, err
-			}
-			durations["accounts["+acc.ID+"].poll_interval"] = d
+
+	if c.PollInterval != "" {
+		d, err := time.ParseDuration(c.PollInterval)
+		if err != nil {
+			return nil, err
 		}
+		durations["poll_interval"] = d
 	}
-	
+
 	if c.HTTP.ReadTimeout != "" {
 		d, err := time.ParseDuration(c.HTTP.ReadTimeout)
 		if err != nil {
@@ -84,7 +72,7 @@ func (c *Config) ParsedDurations() (map[string]time.Duration, error) {
 		}
 		durations["http.read_timeout"] = d
 	}
-	
+
 	if c.HTTP.WriteTimeout != "" {
 		d, err := time.ParseDuration(c.HTTP.WriteTimeout)
 		if err != nil {
@@ -92,6 +80,6 @@ func (c *Config) ParsedDurations() (map[string]time.Duration, error) {
 		}
 		durations["http.write_timeout"] = d
 	}
-	
+
 	return durations, nil
 }

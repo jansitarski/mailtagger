@@ -13,16 +13,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("llm config: %w", err)
 	}
 
-	// Validate accounts
-	if len(c.Accounts) == 0 {
-		return fmt.Errorf("at least one account must be configured")
-	}
-	for i, acc := range c.Accounts {
-		if err := acc.validate(); err != nil {
-			return fmt.Errorf("account[%d] (%s): %w", i, acc.ID, err)
-		}
-	}
-
 	// Validate store config
 	if err := c.validateStore(); err != nil {
 		return fmt.Errorf("store config: %w", err)
@@ -31,6 +21,17 @@ func (c *Config) Validate() error {
 	// Validate HTTP config
 	if err := c.validateHTTP(); err != nil {
 		return fmt.Errorf("http config: %w", err)
+	}
+
+	// Validate poll interval if set
+	if c.PollInterval != "" {
+		d, err := time.ParseDuration(c.PollInterval)
+		if err != nil {
+			return fmt.Errorf("invalid poll_interval duration %q: %w", c.PollInterval, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("poll_interval must be positive, got %s", c.PollInterval)
+		}
 	}
 
 	// Validate categories
@@ -81,36 +82,6 @@ func (c *Config) validateLLM() error {
 	if c.LLM.Timeout != "" {
 		if _, err := time.ParseDuration(c.LLM.Timeout); err != nil {
 			return fmt.Errorf("invalid timeout duration %q: %w", c.LLM.Timeout, err)
-		}
-	}
-
-	return nil
-}
-
-func (acc *AccountConfig) validate() error {
-	if acc.ID == "" {
-		return fmt.Errorf("id is required")
-	}
-
-	if acc.Email == "" {
-		return fmt.Errorf("email is required")
-	}
-
-	if acc.ClientSecretPath == "" {
-		return fmt.Errorf("client_secret_path is required")
-	}
-
-	if acc.TokenPath == "" {
-		return fmt.Errorf("token_path is required")
-	}
-
-	if acc.PollInterval != "" {
-		d, err := time.ParseDuration(acc.PollInterval)
-		if err != nil {
-			return fmt.Errorf("invalid poll_interval duration %q: %w", acc.PollInterval, err)
-		}
-		if d <= 0 {
-			return fmt.Errorf("poll_interval must be positive, got %s", acc.PollInterval)
 		}
 	}
 
