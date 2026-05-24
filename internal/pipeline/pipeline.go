@@ -119,7 +119,15 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 // tick performs a single polling cycle for all accounts.
 // It fetches new messages, classifies them, and applies labels.
+// Returns early if the context is cancelled for graceful shutdown.
 func (p *Pipeline) tick(ctx context.Context) error {
+	// Check for cancellation before starting
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Get all accounts from store
 	accounts, err := p.store.ListAccounts()
 	if err != nil {
@@ -128,6 +136,13 @@ func (p *Pipeline) tick(ctx context.Context) error {
 
 	// Process each account
 	for _, account := range accounts {
+		// Check for cancellation between accounts
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		if err := p.processAccount(ctx, account); err != nil {
 			// Log error but continue with other accounts
 			_ = err
@@ -140,7 +155,15 @@ func (p *Pipeline) tick(ctx context.Context) error {
 
 // processAccount processes a single account during a tick cycle.
 // It fetches history to get new message IDs and processes them.
+// Respects context cancellation for graceful shutdown.
 func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) error {
+	// Check for cancellation
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
 	// Create Gmail client for this account
 	client, err := p.gmailFactory.NewClient(ctx, account)
 	if err != nil {
@@ -165,6 +188,17 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 	// Track how many messages were processed for this tick
 	processed := 0
 	for _, msgID := range messageIDs {
+		// Check for cancellation between messages for graceful shutdown
+		select {
+		case <-ctx.Done():
+			// Save progress before exiting - update history ID with what we've processed so far
+			if newHistoryID != "" && newHistoryID != account.HistoryID {
+				_ = p.store.UpdateHistoryID(account.ID, newHistoryID)
+			}
+			return ctx.Err()
+		default:
+		}
+
 		if err := p.processMessage(ctx, client, account, msgID); err != nil {
 			// Log error but continue with other messages
 			_ = err
