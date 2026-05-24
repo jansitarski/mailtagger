@@ -13,13 +13,14 @@ type Config struct {
 
 // LLMConfig defines the LLM provider configuration.
 type LLMConfig struct {
-	Provider    string  `yaml:"provider"`     // "openai", "anthropic", "gemini", "ollama"
-	Model       string  `yaml:"model"`        // e.g., "gpt-4", "claude-3-5-sonnet-20241022"
-	APIKey      string  `yaml:"api_key"`      // supports ${ENV} expansion
-	BaseURL     string  `yaml:"base_url"`     // optional, for custom endpoints
-	Temperature float64 `yaml:"temperature"`  // 0.0-1.0
-	MaxTokens   int     `yaml:"max_tokens"`   // max response tokens
-	Timeout     string  `yaml:"timeout"`      // e.g., "30s", parsed as time.Duration
+	Provider     string  `yaml:"provider"`      // "openai", "anthropic", "gemini", "ollama"
+	Model        string  `yaml:"model"`         // e.g., "gpt-4", "claude-3-5-sonnet-20241022"
+	APIKey       string  `yaml:"api_key"`       // supports ${ENV} expansion
+	BaseURL      string  `yaml:"base_url"`      // optional, for custom endpoints
+	Temperature  float64 `yaml:"temperature"`   // 0.0-1.0
+	MaxTokens    int     `yaml:"max_tokens"`    // max response tokens
+	Timeout      string  `yaml:"timeout"`       // e.g., "30s", parsed as time.Duration
+	SystemPrompt string  `yaml:"system_prompt"` // optional, custom system prompt template
 }
 
 // AccountConfig defines a Gmail account to monitor.

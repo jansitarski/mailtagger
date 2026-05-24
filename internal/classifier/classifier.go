@@ -35,8 +35,9 @@ type Category struct {
 
 // Classifier provides LLM-based email classification.
 type Classifier struct {
-	model      llms.Model // LLM model for classification
-	categories []Category // available classification categories
+	model            llms.Model // LLM model for classification
+	categories       []Category // available classification categories
+	systemPromptTmpl string     // custom system prompt template (optional)
 }
 
 // New creates a new Classifier with the given model and categories.
@@ -47,10 +48,22 @@ func New(model llms.Model, categories []Category) *Classifier {
 	}
 }
 
+// WithSystemPrompt sets a custom system prompt template for the Classifier.
+func (c *Classifier) WithSystemPrompt(tmpl string) *Classifier {
+	c.systemPromptTmpl = tmpl
+	return c
+}
+
 // Classify classifies the given email and returns a Decision.
 func (c *Classifier) Classify(ctx context.Context, email Email) (*Decision, error) {
+	// Use custom or default system prompt template
+	tmpl := c.systemPromptTmpl
+	if tmpl == "" {
+		tmpl = DefaultSystemPrompt
+	}
+
 	// Render the system prompt with categories
-	systemPrompt, err := RenderSystemPrompt(DefaultSystemPrompt, c.categories)
+	systemPrompt, err := RenderSystemPrompt(tmpl, c.categories)
 	if err != nil {
 		return nil, fmt.Errorf("render system prompt: %w", err)
 	}
