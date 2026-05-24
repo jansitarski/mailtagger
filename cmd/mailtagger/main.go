@@ -4,13 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/jansitarski/mailtagger/internal/config"
+	mthttp "github.com/jansitarski/mailtagger/internal/http"
 )
 
 // version is set at build time via -ldflags
@@ -62,35 +64,62 @@ func runServe(ctx context.Context, configPath, addr string) error {
 
 	slog.Info("starting mailtagger", "version", version, "config", configPath, "addr", addr)
 
-	// Placeholder HTTP server
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+	// Load configuration
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
 
-	srv := &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+	// Override addr from flag if provided
+	httpCfg := cfg.HTTP
+	if addr != "" {
+		httpCfg.Addr = addr
+	}
+
+	// Create HTTP server
+	srv, err := mthttp.New(httpCfg, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create http server: %w", err)
+	}
+
+	// Determine poll interval for health checker
+	pollInterval := 5 * time.Minute
+	if len(cfg.Accounts) > 0 && cfg.Accounts[0].PollInterval != "" {
+		if d, err := time.ParseDuration(cfg.Accounts[0].PollInterval); err == nil {
+			pollInterval = d
+		}
+	}
+
+	// Register /healthz
+	health := mthttp.NewHealthChecker(pollInterval)
+	srv.Router().Get("/healthz", health.Handler())
+
+	// Register /metrics (gated by config)
+	if httpCfg.MetricsEnabled {
+		srv.Router().Handle("/metrics", mthttp.MetricsHandler())
 	}
 
 	// Graceful shutdown
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Start HTTP server in background
+	errCh := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		slog.Info("shutting down server")
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		srv.Shutdown(shutdownCtx)
+		errCh <- srv.Start()
 	}()
 
-	slog.Info("server listening", "addr", addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("server error: %w", err)
+	// Wait for shutdown signal or server error
+	select {
+	case <-ctx.Done():
+		slog.Info("shutdown signal received")
+		if err := srv.Shutdown(10 * time.Second); err != nil {
+			return fmt.Errorf("server shutdown error: %w", err)
+		}
+	case err := <-errCh:
+		if err != nil {
+			return err
+		}
 	}
 
 	slog.Info("server stopped")
