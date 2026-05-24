@@ -24,16 +24,24 @@ type Message struct {
 
 // GetMessage fetches a message by ID with format=full.
 // Returns the full message including headers and body parts.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (c *Client) GetMessage(ctx context.Context, messageID string) (*Message, error) {
 	if messageID == "" {
 		return nil, fmt.Errorf("message ID is required")
 	}
 
-	// Fetch the message with full format to get all headers and body parts
-	gmailMsg, err := c.service.Users.Messages.Get("me", messageID).
-		Context(ctx).
-		Format("full").
-		Do()
+	var gmailMsg *gmail.Message
+
+	// Execute with rate limiting and retry
+	err := c.rateLimiter.Do(ctx, func() error {
+		var apiErr error
+		gmailMsg, apiErr = c.service.Users.Messages.Get("me", messageID).
+			Context(ctx).
+			Format("full").
+			Do()
+		return apiErr
+	})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to get message %s: %w", messageID, err)
 	}
@@ -86,6 +94,7 @@ func (c *Client) GetMessages(ctx context.Context, messageIDs []string) (map[stri
 
 // AddLabels adds one or more labels to a message.
 // Returns the updated message with new label IDs.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (c *Client) AddLabels(ctx context.Context, messageID string, labelIDs []string) error {
 	if messageID == "" {
 		return fmt.Errorf("message ID is required")
@@ -99,16 +108,19 @@ func (c *Client) AddLabels(ctx context.Context, messageID string, labelIDs []str
 		AddLabelIds: labelIDs,
 	}
 
-	// Execute the modification
-	_, err := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+	// Execute with rate limiting and retry - return raw API error for retry detection
+	err := c.rateLimiter.Do(ctx, func() error {
+		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+		return apiErr
+	})
 	if err != nil {
 		return fmt.Errorf("failed to add labels to message %s: %w", messageID, err)
 	}
-
 	return nil
 }
 
 // RemoveLabels removes one or more labels from a message.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (c *Client) RemoveLabels(ctx context.Context, messageID string, labelIDs []string) error {
 	if messageID == "" {
 		return fmt.Errorf("message ID is required")
@@ -122,16 +134,19 @@ func (c *Client) RemoveLabels(ctx context.Context, messageID string, labelIDs []
 		RemoveLabelIds: labelIDs,
 	}
 
-	// Execute the modification
-	_, err := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+	// Execute with rate limiting and retry - return raw API error for retry detection
+	err := c.rateLimiter.Do(ctx, func() error {
+		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+		return apiErr
+	})
 	if err != nil {
 		return fmt.Errorf("failed to remove labels from message %s: %w", messageID, err)
 	}
-
 	return nil
 }
 
 // ModifyLabels adds and/or removes labels from a message in a single operation.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (c *Client) ModifyLabels(ctx context.Context, messageID string, addLabelIDs, removeLabelIDs []string) error {
 	if messageID == "" {
 		return fmt.Errorf("message ID is required")
@@ -146,11 +161,13 @@ func (c *Client) ModifyLabels(ctx context.Context, messageID string, addLabelIDs
 		RemoveLabelIds: removeLabelIDs,
 	}
 
-	// Execute the modification
-	_, err := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+	// Execute with rate limiting and retry - return raw API error for retry detection
+	err := c.rateLimiter.Do(ctx, func() error {
+		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
+		return apiErr
+	})
 	if err != nil {
 		return fmt.Errorf("failed to modify labels for message %s: %w", messageID, err)
 	}
-
 	return nil
 }
