@@ -2,9 +2,13 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrAccountNotFound is returned when an account lookup finds no matching row.
+var ErrAccountNotFound = errors.New("account not found")
 
 // Account represents a Gmail account stored in the database.
 type Account struct {
@@ -43,7 +47,7 @@ func (s *Store) GetAccount(id int64) (*Account, error) {
 		WHERE id = ?
 	`, id).Scan(&acc.ID, &acc.Email, &acc.EncryptedToken, &acc.HistoryID, &acc.CreatedAt, &acc.UpdatedAt)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("account not found")
+		return nil, ErrAccountNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account: %w", err)
@@ -60,7 +64,7 @@ func (s *Store) GetAccountByEmail(email string) (*Account, error) {
 		WHERE email = ?
 	`, email).Scan(&acc.ID, &acc.Email, &acc.EncryptedToken, &acc.HistoryID, &acc.CreatedAt, &acc.UpdatedAt)
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("account not found")
+		return nil, ErrAccountNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get account: %w", err)

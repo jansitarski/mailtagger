@@ -42,9 +42,10 @@ type StoreConfig struct {
 
 // HTTPConfig defines the HTTP server settings.
 type HTTPConfig struct {
-	Addr         string `yaml:"addr"`           // listen address, e.g., ":8080"
-	ReadTimeout  string `yaml:"read_timeout"`   // e.g., "10s", parsed as time.Duration
-	WriteTimeout string `yaml:"write_timeout"`  // e.g., "10s", parsed as time.Duration
+	Addr           string `yaml:"addr"`            // listen address, e.g., ":8080"
+	ReadTimeout    string `yaml:"read_timeout"`    // e.g., "10s", parsed as time.Duration
+	WriteTimeout   string `yaml:"write_timeout"`   // e.g., "10s", parsed as time.Duration
+	MetricsEnabled bool   `yaml:"metrics_enabled"` // enable /metrics endpoint
 }
 
 // Category defines a classification category and its Gmail label.
