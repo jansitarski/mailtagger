@@ -3,6 +3,7 @@ package pipeline
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jansitarski/mailtagger/internal/classifier"
@@ -14,6 +15,9 @@ import (
 // DefaultPollInterval is the default polling interval if not configured.
 const DefaultPollInterval = 5 * time.Minute
 
+// AILabelPrefix is the prefix for AI-generated labels.
+const AILabelPrefix = "AI/"
+
 // GmailClientFactory creates Gmail clients for accounts.
 type GmailClientFactory interface {
 	// NewClient creates a Gmail client for the given account.
@@ -23,11 +27,12 @@ type GmailClientFactory interface {
 // Pipeline orchestrates email classification for all configured accounts.
 // It polls Gmail for new messages, classifies them using the LLM, and applies labels.
 type Pipeline struct {
-	store      *store.Store
-	classifier *classifier.Classifier
+	store        *store.Store
+	classifier   *classifier.Classifier
 	gmailFactory GmailClientFactory
-	config     *config.Config
-	categories map[string]string // category name -> label name mapping
+	config       *config.Config
+	categories   map[string]string // category name -> label name mapping
+	aiLabelIDs   map[int64]map[string]bool // account ID -> set of AI label IDs
 }
 
 // New creates a new Pipeline with the given dependencies.
@@ -49,6 +54,7 @@ func New(
 		gmailFactory: gmailFactory,
 		config:       cfg,
 		categories:   categories,
+		aiLabelIDs:   make(map[int64]map[string]bool),
 	}
 }
 
@@ -187,6 +193,71 @@ func (p *Pipeline) fetchNewMessageIDs(ctx context.Context, client *gmail.Client,
 // processMessage processes a single message. This is a placeholder that will
 // be implemented in task 5 with the full pipeline (classify, label, record).
 func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, account *store.Account, messageID string) error {
+	// Check if message was already processed
+	skip, err := p.shouldSkipMessage(ctx, client, account, messageID)
+	if err != nil {
+		return err
+	}
+	if skip {
+		return nil
+	}
+
 	// Will be implemented in task mailtagger-6zk.5
 	return nil
+}
+
+// shouldSkipMessage checks if a message should be skipped.
+// Returns true if:
+// - Message is already in processed_messages table
+// - Message already has an AI/* label
+func (p *Pipeline) shouldSkipMessage(ctx context.Context, client *gmail.Client, account *store.Account, messageID string) (bool, error) {
+	// Check if already processed in our store
+	exists, err := p.store.ProcessedMessageExists(account.ID, messageID)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return true, nil
+	}
+
+	// Check if message already has an AI/* label
+	msg, err := client.GetMessage(ctx, messageID)
+	if err != nil {
+		return false, err
+	}
+
+	if p.hasAILabel(account.ID, msg) {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// hasAILabel checks if a message already has an AI/* label.
+// It checks the message's label IDs against the cached set of AI label IDs for the account.
+func (p *Pipeline) hasAILabel(accountID int64, msg *gmail.Message) bool {
+	aiLabels, ok := p.aiLabelIDs[accountID]
+	if !ok || len(aiLabels) == 0 {
+		return false
+	}
+
+	for _, labelID := range msg.LabelIDs {
+		if aiLabels[labelID] {
+			return true
+		}
+	}
+
+	return false
+}
+
+// cacheAILabelIDs caches the label IDs for AI/* labels for an account.
+// This should be called during account initialization to build the cache.
+func (p *Pipeline) cacheAILabelIDs(accountID int64, labelIDs map[string]string) {
+	aiLabels := make(map[string]bool)
+	for labelName, labelID := range labelIDs {
+		if strings.HasPrefix(labelName, AILabelPrefix) {
+			aiLabels[labelID] = true
+		}
+	}
+	p.aiLabelIDs[accountID] = aiLabels
 }
