@@ -4,11 +4,12 @@ import "time"
 
 // Config is the top-level configuration structure for mailtagger.
 type Config struct {
-	LLM       LLMConfig       `yaml:"llm"`
-	Accounts  []AccountConfig `yaml:"accounts"`
-	Store     StoreConfig     `yaml:"store"`
-	HTTP      HTTPConfig      `yaml:"http"`
-	Categories []Category     `yaml:"categories"`
+	LLM                LLMConfig       `yaml:"llm"`
+	Accounts           []AccountConfig `yaml:"accounts"`
+	Store              StoreConfig     `yaml:"store"`
+	HTTP               HTTPConfig      `yaml:"http"`
+	Categories         []Category      `yaml:"categories"`
+	MaxMessagesPerTick int             `yaml:"max_messages_per_tick"` // max messages to process per tick (0 = unlimited)
 }
 
 // LLMConfig defines the LLM provider configuration.

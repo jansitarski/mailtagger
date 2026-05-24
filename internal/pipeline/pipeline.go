@@ -18,6 +18,10 @@ const DefaultPollInterval = 5 * time.Minute
 // AILabelPrefix is the prefix for AI-generated labels.
 const AILabelPrefix = "AI/"
 
+// DefaultMaxMessagesPerTick is the default max messages per tick if not configured.
+// 0 means unlimited.
+const DefaultMaxMessagesPerTick = 50
+
 // GmailClientFactory creates Gmail clients for accounts.
 type GmailClientFactory interface {
 	// NewClient creates a Gmail client for the given account.
@@ -149,13 +153,24 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 		return err
 	}
 
-	// Process each message
+	// Apply max messages per tick throttle
+	maxMessages := p.config.MaxMessagesPerTick
+	if maxMessages == 0 {
+		maxMessages = DefaultMaxMessagesPerTick
+	}
+	if maxMessages > 0 && len(messageIDs) > maxMessages {
+		messageIDs = messageIDs[:maxMessages]
+	}
+
+	// Track how many messages were processed for this tick
+	processed := 0
 	for _, msgID := range messageIDs {
 		if err := p.processMessage(ctx, client, account, msgID); err != nil {
 			// Log error but continue with other messages
 			_ = err
 			continue
 		}
+		processed++
 	}
 
 	// Update history ID if we got new messages
