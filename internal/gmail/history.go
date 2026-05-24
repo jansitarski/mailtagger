@@ -23,6 +23,7 @@ type HistoryResult struct {
 // Returns message IDs added since the historyID and the new historyID for the next sync.
 // If the history ID is invalid (404), it automatically falls back to bootstrapping.
 // If historyID is empty, this function will return an error indicating a bootstrap is needed.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (c *Client) SyncHistory(ctx context.Context, startHistoryID string) (*HistoryResult, error) {
 	if startHistoryID == "" {
 		return nil, fmt.Errorf("startHistoryID is required for history sync")
@@ -44,23 +45,26 @@ func (c *Client) SyncHistory(ctx context.Context, startHistoryID string) (*Histo
 		StartHistoryId(historyID).
 		HistoryTypes("messageAdded")
 
-	// Execute the request with pagination
-	err = req.Pages(ctx, func(resp *gmail.ListHistoryResponse) error {
-		// Extract message IDs from history records
-		for _, history := range resp.History {
-			for _, msg := range history.MessagesAdded {
-				if msg.Message != nil && msg.Message.Id != "" {
-					result.MessageIDs = append(result.MessageIDs, msg.Message.Id)
+	// Execute with rate limiting - Pages handles pagination internally
+	// We need to wrap the entire pagination operation
+	err = c.rateLimiter.Do(ctx, func() error {
+		return req.Pages(ctx, func(resp *gmail.ListHistoryResponse) error {
+			// Extract message IDs from history records
+			for _, history := range resp.History {
+				for _, msg := range history.MessagesAdded {
+					if msg.Message != nil && msg.Message.Id != "" {
+						result.MessageIDs = append(result.MessageIDs, msg.Message.Id)
+					}
 				}
 			}
-		}
 
-		// Update the next history ID
-		if resp.HistoryId != 0 {
-			result.NextHistoryID = fmt.Sprintf("%d", resp.HistoryId)
-		}
+			// Update the next history ID
+			if resp.HistoryId != 0 {
+				result.NextHistoryID = fmt.Sprintf("%d", resp.HistoryId)
+			}
 
-		return nil
+			return nil
+		})
 	})
 
 	if err != nil {
@@ -83,9 +87,17 @@ func (c *Client) SyncHistory(ctx context.Context, startHistoryID string) (*Histo
 // GetCurrentHistoryID fetches the current history ID for the mailbox.
 // This is useful for bootstrapping when you don't have a history ID yet.
 // It returns the current history ID without fetching any messages.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (c *Client) GetCurrentHistoryID(ctx context.Context) (string, error) {
-	// Fetch the user's profile to get the current history ID
-	profile, err := c.service.Users.GetProfile("me").Context(ctx).Do()
+	var profile *gmail.Profile
+
+	// Execute with rate limiting and retry
+	err := c.rateLimiter.Do(ctx, func() error {
+		var apiErr error
+		profile, apiErr = c.service.Users.GetProfile("me").Context(ctx).Do()
+		return apiErr
+	})
+
 	if err != nil {
 		return "", fmt.Errorf("failed to get profile: %w", err)
 	}
@@ -100,23 +112,26 @@ func (c *Client) GetCurrentHistoryID(ctx context.Context) (string, error) {
 // Bootstrap performs a full mailbox scan to get all message IDs and the current history ID.
 // This is used when there's no history ID or when the history ID is no longer valid (404).
 // Note: This can be expensive for large mailboxes. Consider using query filters.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (c *Client) Bootstrap(ctx context.Context) (*HistoryResult, error) {
 	result := &HistoryResult{
 		MessageIDs:   []string{},
 		Bootstrapped: true,
 	}
 
-	// List all messages
+	// List all messages with rate limiting
 	req := c.service.Users.Messages.List("me").Context(ctx)
 
-	// Execute the request with pagination
-	err := req.Pages(ctx, func(resp *gmail.ListMessagesResponse) error {
-		for _, msg := range resp.Messages {
-			if msg.Id != "" {
-				result.MessageIDs = append(result.MessageIDs, msg.Id)
+	// Execute with rate limiting - wrap the entire pagination operation
+	err := c.rateLimiter.Do(ctx, func() error {
+		return req.Pages(ctx, func(resp *gmail.ListMessagesResponse) error {
+			for _, msg := range resp.Messages {
+				if msg.Id != "" {
+					result.MessageIDs = append(result.MessageIDs, msg.Id)
+				}
 			}
-		}
-		return nil
+			return nil
+		})
 	})
 
 	if err != nil {

@@ -12,10 +12,11 @@ import (
 	"google.golang.org/api/option"
 )
 
-// Client wraps the Gmail API service with OAuth2 token management.
+// Client wraps the Gmail API service with OAuth2 token management and rate limiting.
 type Client struct {
-	service *gmail.Service
-	email   string
+	service     *gmail.Service
+	email       string
+	rateLimiter *RateLimiter
 }
 
 // NewClient creates a new Gmail API client using OAuth2 credentials.
@@ -49,8 +50,9 @@ func NewClient(ctx context.Context, email string, clientSecretPath string, token
 	}
 
 	return &Client{
-		service: service,
-		email:   email,
+		service:     service,
+		email:       email,
+		rateLimiter: NewRateLimiter(DefaultRateLimiterConfig()),
 	}, nil
 }
 
@@ -62,6 +64,17 @@ func (c *Client) Service() *gmail.Service {
 // Email returns the email address associated with this client.
 func (c *Client) Email() string {
 	return c.email
+}
+
+// RateLimiter returns the rate limiter for this client.
+// This can be used to configure rate limiting behavior.
+func (c *Client) RateLimiter() *RateLimiter {
+	return c.rateLimiter
+}
+
+// SetRateLimiter allows replacing the default rate limiter with a custom one.
+func (c *Client) SetRateLimiter(rl *RateLimiter) {
+	c.rateLimiter = rl
 }
 
 // TokenFromFile reads an OAuth2 token from a JSON file.
