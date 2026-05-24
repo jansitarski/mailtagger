@@ -13,10 +13,15 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/oauth2/google"
+	"google.golang.org/api/gmail/v1"
 
 	"github.com/jansitarski/mailtagger/internal/auth"
+	"github.com/jansitarski/mailtagger/internal/classifier"
 	"github.com/jansitarski/mailtagger/internal/config"
+	internalGmail "github.com/jansitarski/mailtagger/internal/gmail"
 	mthttp "github.com/jansitarski/mailtagger/internal/http"
+	"github.com/jansitarski/mailtagger/internal/pipeline"
 	"github.com/jansitarski/mailtagger/internal/store"
 )
 
@@ -47,6 +52,8 @@ It polls Gmail, classifies new messages with an LLM, and applies labels.`,
 func newServeCmd() *cobra.Command {
 	var configPath string
 	var addr string
+	var clientSecretPath string
+	var encryptionKeyHex string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -57,17 +64,20 @@ func newServeCmd() *cobra.Command {
 			if cmd.Flags().Changed("addr") {
 				addrOverride = addr
 			}
-			return runServe(cmd.Context(), configPath, addrOverride)
+			return runServe(cmd.Context(), configPath, addrOverride, clientSecretPath, encryptionKeyHex)
 		},
 	}
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "/etc/mailtagger/config.yaml", "path to config file")
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP server listen address (overrides config)")
+	cmd.Flags().StringVar(&clientSecretPath, "client-secret", "", "path to OAuth client_secret.json (required for Gmail API)")
+	cmd.Flags().StringVar(&encryptionKeyHex, "encryption-key", "", "32-byte encryption key in hex (or use MAILTAGGER_ENCRYPTION_KEY env var)")
+	cmd.MarkFlagRequired("client-secret")
 
 	return cmd
 }
 
-func runServe(ctx context.Context, configPath, addrOverride string) error {
+func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, encryptionKeyHex string) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
@@ -78,6 +88,65 @@ func runServe(ctx context.Context, configPath, addrOverride string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+
+	// Get encryption key
+	encryptionKey, err := getEncryptionKey(encryptionKeyHex)
+	if err != nil {
+		return err
+	}
+
+	// Open the store
+	st, err := store.Open(cfg.Store.Path, 30)
+	if err != nil {
+		return fmt.Errorf("failed to open store: %w", err)
+	}
+	defer st.Close()
+
+	// Run migrations
+	if err := st.Migrate(); err != nil {
+		return fmt.Errorf("failed to migrate store: %w", err)
+	}
+
+	// Check for accounts
+	accounts, err := st.ListAccounts()
+	if err != nil {
+		return fmt.Errorf("failed to list accounts: %w", err)
+	}
+	if len(accounts) == 0 {
+		return fmt.Errorf("no accounts found; run 'mailtagger auth' first to add a Gmail account")
+	}
+	slog.Info("loaded accounts", "count", len(accounts))
+
+	// Create LLM model
+	llmModel, err := classifier.NewModel(ctx, cfg.LLM)
+	if err != nil {
+		return fmt.Errorf("failed to create LLM model: %w", err)
+	}
+
+	// Convert config categories to classifier categories
+	categories := make([]classifier.Category, len(cfg.Categories))
+	for i, cat := range cfg.Categories {
+		categories[i] = classifier.Category{
+			Name:        cat.Name,
+			Description: cat.Description,
+		}
+	}
+
+	// Create classifier
+	cls, err := classifier.New(llmModel, categories)
+	if err != nil {
+		return fmt.Errorf("failed to create classifier: %w", err)
+	}
+
+	// Create Gmail client factory
+	gmailFactory := &gmailClientFactory{
+		clientSecretPath: clientSecretPath,
+		store:            st,
+		encryptionKey:    encryptionKey,
+	}
+
+	// Create pipeline
+	p := pipeline.New(st, cls, gmailFactory, cfg).WithLogger(logger)
 
 	// Override addr from flag only if explicitly set
 	httpCfg := cfg.HTTP
@@ -93,8 +162,8 @@ func runServe(ctx context.Context, configPath, addrOverride string) error {
 
 	// Determine poll interval for health checker
 	pollInterval := 5 * time.Minute
-	if len(cfg.Accounts) > 0 && cfg.Accounts[0].PollInterval != "" {
-		if d, err := time.ParseDuration(cfg.Accounts[0].PollInterval); err == nil {
+	if cfg.PollInterval != "" {
+		if d, err := time.ParseDuration(cfg.PollInterval); err == nil {
 			pollInterval = d
 		}
 	}
@@ -108,10 +177,7 @@ func runServe(ctx context.Context, configPath, addrOverride string) error {
 		srv.Router().Handle("/metrics", mthttp.MetricsHandler())
 	}
 
-	// Register /oauth/callback
-	// NOTE: OAuthHandler requires a TokenStore, encryption key, and state validator
-	// which depend on store initialization. For now, register a placeholder that
-	// returns 503 until the full pipeline is wired (Epic 10: Web Setup Wizard).
+	// Register /oauth/callback placeholder
 	srv.Router().Get("/oauth/callback", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"oauth not configured"}`, http.StatusServiceUnavailable)
 	})
@@ -121,26 +187,100 @@ func runServe(ctx context.Context, configPath, addrOverride string) error {
 	defer cancel()
 
 	// Start HTTP server in background
-	errCh := make(chan error, 1)
+	httpErrCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.Start()
+		httpErrCh <- srv.Start()
 	}()
 
-	// Wait for shutdown signal or server error
+	// Start pipeline in background
+	pipelineErrCh := make(chan error, 1)
+	go func() {
+		pipelineErrCh <- p.Run(ctx)
+	}()
+
+	// Wait for shutdown signal or error
 	select {
 	case <-ctx.Done():
 		slog.Info("shutdown signal received")
 		if err := srv.Shutdown(10 * time.Second); err != nil {
-			return fmt.Errorf("server shutdown error: %w", err)
+			slog.Error("server shutdown error", "error", err)
 		}
-	case err := <-errCh:
+	case err := <-httpErrCh:
 		if err != nil {
-			return err
+			return fmt.Errorf("http server error: %w", err)
+		}
+	case err := <-pipelineErrCh:
+		if err != nil && err != context.Canceled {
+			return fmt.Errorf("pipeline error: %w", err)
 		}
 	}
 
 	slog.Info("server stopped")
 	return nil
+}
+
+// gmailClientFactory creates Gmail clients for accounts using database-stored tokens.
+type gmailClientFactory struct {
+	clientSecretPath string
+	store            *store.Store
+	encryptionKey    []byte
+}
+
+func (f *gmailClientFactory) NewClient(ctx context.Context, account *store.Account) (*internalGmail.Client, error) {
+	// Read the client secret file for OAuth config
+	clientSecretData, err := os.ReadFile(f.clientSecretPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read client secret: %w", err)
+	}
+
+	oauthConfig, err := google.ConfigFromJSON(clientSecretData, gmail.GmailModifyScope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse client secret: %w", err)
+	}
+
+	// Create adapters for the existing StoreTokenSource
+	storeAdapter := &tokenStoreAdapter{store: f.store}
+	cryptoAdapter := &tokenCryptoAdapter{}
+
+	// Use the existing StoreTokenSource from internal/gmail/auth.go
+	tokenSource := internalGmail.NewStoreTokenSource(
+		ctx,
+		account.Email,
+		oauthConfig,
+		storeAdapter,
+		cryptoAdapter,
+		f.encryptionKey,
+	)
+
+	return internalGmail.NewClient(ctx, account.Email, f.clientSecretPath, tokenSource)
+}
+
+// tokenStoreAdapter adapts store.Store to gmail.TokenStore interface.
+type tokenStoreAdapter struct {
+	store *store.Store
+}
+
+func (a *tokenStoreAdapter) GetAccountByEmail(email string) (int64, []byte, error) {
+	account, err := a.store.GetAccountByEmail(email)
+	if err != nil {
+		return 0, nil, err
+	}
+	return account.ID, account.EncryptedToken, nil
+}
+
+func (a *tokenStoreAdapter) UpdateToken(accountID int64, encryptedToken []byte) error {
+	return a.store.UpdateToken(accountID, encryptedToken)
+}
+
+// tokenCryptoAdapter adapts store crypto functions to gmail.TokenCrypto interface.
+type tokenCryptoAdapter struct{}
+
+func (a *tokenCryptoAdapter) EncryptToken(plaintext []byte, key []byte) ([]byte, error) {
+	return store.EncryptToken(plaintext, key)
+}
+
+func (a *tokenCryptoAdapter) DecryptToken(ciphertext []byte, key []byte) ([]byte, error) {
+	return store.DecryptToken(ciphertext, key)
 }
 
 func newAuthCmd() *cobra.Command {
