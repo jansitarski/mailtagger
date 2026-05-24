@@ -3,6 +3,7 @@ package classifier
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jansitarski/mailtagger/internal/config"
 	"github.com/tmc/langchaingo/llms"
@@ -14,7 +15,8 @@ import (
 
 // NewModel creates an llms.Model from the given LLM configuration.
 func NewModel(ctx context.Context, cfg config.LLMConfig) (llms.Model, error) {
-	switch cfg.Provider {
+	provider := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	switch provider {
 	case "openai":
 		return newOpenAIModel(cfg)
 	case "anthropic":

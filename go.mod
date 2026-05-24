@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/jaytaylor/html2text v0.0.0-20260303211410-1a4bdc82ecec
 	github.com/spf13/cobra v1.10.2
+	github.com/tmc/langchaingo v0.1.14
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/time v0.15.0
 	google.golang.org/api v0.280.0
@@ -49,7 +50,6 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/ssor/bom v0.0.0-20170718123548-6386211fdfcf // indirect
-	github.com/tmc/langchaingo v0.1.14 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.67.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 // indirect

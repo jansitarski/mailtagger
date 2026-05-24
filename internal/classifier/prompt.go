@@ -12,12 +12,12 @@ Categories:
 {{range .Categories}}- {{.Name}}: {{.Description}}
 {{end}}
 Respond with a JSON object containing:
-- "category": the category name (must be one of the listed categories)
+- "category": the category name (must be exactly one of the listed categories above)
 - "confidence": a float between 0.0 and 1.0 indicating your confidence
 - "reasoning": a brief explanation for your classification
 
-Example response:
-{"category": "Newsletter", "confidence": 0.95, "reasoning": "Email contains promotional content from a subscription service."}`
+Example response format:
+{"category": "<CATEGORY_NAME>", "confidence": 0.95, "reasoning": "Brief explanation here."}`
 
 // PromptData contains the data passed to the system prompt template.
 type PromptData struct {
