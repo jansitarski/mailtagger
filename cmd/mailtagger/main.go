@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,8 +14,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jansitarski/mailtagger/internal/auth"
 	"github.com/jansitarski/mailtagger/internal/config"
 	mthttp "github.com/jansitarski/mailtagger/internal/http"
+	"github.com/jansitarski/mailtagger/internal/store"
 )
 
 // version is set at build time via -ldflags
@@ -142,6 +146,10 @@ func runServe(ctx context.Context, configPath, addrOverride string) error {
 func newAuthCmd() *cobra.Command {
 	var accountID string
 	var clientSecretPath string
+	var dbPath string
+	var encryptionKeyHex string
+	var timeout time.Duration
+	var manual bool
 
 	cmd := &cobra.Command{
 		Use:   "auth",
@@ -150,41 +158,203 @@ func newAuthCmd() *cobra.Command {
 This is the headless fallback when the web setup wizard is not accessible.
 It prints an authorization URL and prompts for the redirect URL after consent.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAuth(accountID, clientSecretPath)
+			return runAuth(cmd.Context(), authConfig{
+				accountID:        accountID,
+				clientSecretPath: clientSecretPath,
+				dbPath:           dbPath,
+				encryptionKeyHex: encryptionKeyHex,
+				timeout:          timeout,
+				manual:           manual,
+			})
 		},
 	}
 
 	cmd.Flags().StringVar(&accountID, "account", "primary", "account ID to authenticate")
 	cmd.Flags().StringVar(&clientSecretPath, "client-secret", "", "path to OAuth client_secret.json file")
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/mailtagger/state.db", "path to SQLite database")
+	cmd.Flags().StringVar(&encryptionKeyHex, "encryption-key", "", "32-byte encryption key in hex (64 chars), or use MAILTAGGER_ENCRYPTION_KEY env var")
+	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Minute, "timeout for OAuth flow")
+	cmd.Flags().BoolVar(&manual, "manual", false, "use manual paste flow instead of local callback server")
 	cmd.MarkFlagRequired("client-secret")
 
 	return cmd
 }
 
-func runAuth(accountID, clientSecretPath string) error {
+type authConfig struct {
+	accountID        string
+	clientSecretPath string
+	dbPath           string
+	encryptionKeyHex string
+	timeout          time.Duration
+	manual           bool
+}
+
+func runAuth(ctx context.Context, cfg authConfig) error {
 	// Validate account ID
-	if accountID == "" {
+	if cfg.accountID == "" {
 		return fmt.Errorf("account ID cannot be empty")
 	}
 
 	// Validate client secret file exists
-	if _, err := os.Stat(clientSecretPath); err != nil {
+	if _, err := os.Stat(cfg.clientSecretPath); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("client_secret.json file not found: %s", clientSecretPath)
+			return fmt.Errorf("client_secret.json file not found: %s", cfg.clientSecretPath)
 		}
 		return fmt.Errorf("failed to access client_secret.json: %w", err)
 	}
 
-	slog.Info("starting OAuth authentication", "account", accountID, "client_secret", clientSecretPath)
+	// Get encryption key
+	encryptionKey, err := getEncryptionKey(cfg.encryptionKeyHex)
+	if err != nil {
+		return err
+	}
 
-	// TODO: Parse client_secret.json (mailtagger-dg2.2)
-	// TODO: Generate OAuth URL (mailtagger-dg2.3)
-	// TODO: Start local callback server or manual paste fallback (mailtagger-dg2.4, dg2.5)
-	// TODO: Exchange auth code for tokens (mailtagger-dg2.6)
-	// TODO: Print success message (mailtagger-dg2.7)
+	fmt.Println("mailtagger OAuth Authentication")
+	fmt.Println("================================")
+	fmt.Printf("Account: %s\n", cfg.accountID)
+	fmt.Println()
 
-	fmt.Println("OAuth authentication flow not yet implemented.")
+	// Parse client secret
+	clientSecret, err := auth.LoadClientSecret(cfg.clientSecretPath)
+	if err != nil {
+		return fmt.Errorf("failed to load client secret: %w", err)
+	}
+
+	// Generate state for CSRF protection
+	state, err := generateState()
+	if err != nil {
+		return fmt.Errorf("failed to generate state: %w", err)
+	}
+
+	// Determine redirect URI and auth code acquisition method
+	var authCode string
+	var oauthConfig = clientSecret.OAuthConfig("http://127.0.0.1/")
+
+	if cfg.manual {
+		// Manual paste flow
+		fmt.Println("Using manual paste flow.")
+		fmt.Println()
+
+		// Use out-of-band redirect for manual flow
+		redirectURI := "urn:ietf:wg:oauth:2.0:oob"
+		oauthConfig = clientSecret.OAuthConfig(redirectURI)
+		authURL := oauthConfig.AuthCodeURL(state)
+
+		fmt.Println("1. Open this URL in your browser:")
+		fmt.Println()
+		fmt.Println("   ", authURL)
+		fmt.Println()
+
+		result, err := auth.ManualCodeInput(os.Stdin, os.Stdout, state)
+		if err != nil {
+			return fmt.Errorf("failed to get authorization code: %w", err)
+		}
+		authCode = result.Code
+
+	} else {
+		// Local callback server flow
+		callbackServer, err := auth.NewCallbackServer()
+		if err != nil {
+			return fmt.Errorf("failed to start callback server: %w", err)
+		}
+
+		redirectURI := callbackServer.RedirectURL()
+		oauthConfig = clientSecret.OAuthConfig(redirectURI)
+		authURL := oauthConfig.AuthCodeURL(state)
+
+		fmt.Println("1. Open this URL in your browser:")
+		fmt.Println()
+		fmt.Println("   ", authURL)
+		fmt.Println()
+		fmt.Printf("2. Waiting for authorization callback on port %d...\n", callbackServer.Port())
+		fmt.Println("   (Press Ctrl+C to cancel, or use --manual flag for paste flow)")
+		fmt.Println()
+
+		result, err := callbackServer.WaitForCallback(ctx, cfg.timeout)
+		if err != nil {
+			if err == auth.ErrAuthTimeout {
+				return fmt.Errorf("authorization timed out after %s; try --manual flag", cfg.timeout)
+			}
+			return fmt.Errorf("authorization failed: %w", err)
+		}
+
+		if result.Error != "" {
+			return fmt.Errorf("OAuth error: %s", result.Error)
+		}
+		if result.State != state {
+			return fmt.Errorf("state mismatch: possible CSRF attack")
+		}
+		authCode = result.Code
+	}
+
+	fmt.Println("Authorization code received. Exchanging for tokens...")
+
+	// Open database
+	st, err := store.Open(cfg.dbPath, 30)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer st.Close()
+
+	// Run migrations
+	if err := st.Migrate(); err != nil {
+		return fmt.Errorf("failed to migrate database: %w", err)
+	}
+
+	// Exchange code for tokens
+	exchanger := auth.NewTokenExchanger(oauthConfig, st, encryptionKey)
+	result, err := exchanger.Exchange(ctx, authCode)
+	if err != nil {
+		return fmt.Errorf("failed to exchange authorization code: %w", err)
+	}
+
+	// Print success message
+	fmt.Println()
+	fmt.Println("================================")
+	fmt.Println("Authentication successful!")
+	fmt.Println("================================")
+	fmt.Println()
+	fmt.Printf("  Email:      %s\n", result.Email)
+	fmt.Printf("  Account ID: %d\n", result.AccountID)
+	if result.IsNewToken {
+		fmt.Println("  Status:     New account created")
+	} else {
+		fmt.Println("  Status:     Existing account updated")
+	}
+	fmt.Println()
+	fmt.Println("The OAuth token has been encrypted and stored in the database.")
+	fmt.Println("You can now use this account with 'mailtagger serve'.")
+
 	return nil
+}
+
+// getEncryptionKey returns the encryption key from the flag or environment variable.
+func getEncryptionKey(keyHex string) ([]byte, error) {
+	if keyHex == "" {
+		keyHex = os.Getenv("MAILTAGGER_ENCRYPTION_KEY")
+	}
+	if keyHex == "" {
+		return nil, fmt.Errorf("encryption key required: use --encryption-key flag or MAILTAGGER_ENCRYPTION_KEY env var")
+	}
+
+	key, err := hex.DecodeString(keyHex)
+	if err != nil {
+		return nil, fmt.Errorf("invalid encryption key: must be hex-encoded: %w", err)
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("invalid encryption key: must be 32 bytes (64 hex chars), got %d bytes", len(key))
+	}
+
+	return key, nil
+}
+
+// generateState generates a random state string for CSRF protection.
+func generateState() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func newResetCursorCmd() *cobra.Command {
