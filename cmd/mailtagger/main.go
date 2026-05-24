@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -48,21 +49,25 @@ func newServeCmd() *cobra.Command {
 		Short: "Start the mailtagger HTTP server and worker",
 		Long:  `Starts the HTTP server (health, metrics, OAuth callback) and the email classification worker.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runServe(cmd.Context(), configPath, addr)
+			addrOverride := ""
+			if cmd.Flags().Changed("addr") {
+				addrOverride = addr
+			}
+			return runServe(cmd.Context(), configPath, addrOverride)
 		},
 	}
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "/etc/mailtagger/config.yaml", "path to config file")
-	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP server listen address")
+	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP server listen address (overrides config)")
 
 	return cmd
 }
 
-func runServe(ctx context.Context, configPath, addr string) error {
+func runServe(ctx context.Context, configPath, addrOverride string) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	slog.Info("starting mailtagger", "version", version, "config", configPath, "addr", addr)
+	slog.Info("starting mailtagger", "version", version, "config", configPath)
 
 	// Load configuration
 	cfg, err := config.Load(configPath)
@@ -70,10 +75,10 @@ func runServe(ctx context.Context, configPath, addr string) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	// Override addr from flag if provided
+	// Override addr from flag only if explicitly set
 	httpCfg := cfg.HTTP
-	if addr != "" {
-		httpCfg.Addr = addr
+	if addrOverride != "" {
+		httpCfg.Addr = addrOverride
 	}
 
 	// Create HTTP server
@@ -98,6 +103,14 @@ func runServe(ctx context.Context, configPath, addr string) error {
 	if httpCfg.MetricsEnabled {
 		srv.Router().Handle("/metrics", mthttp.MetricsHandler())
 	}
+
+	// Register /oauth/callback
+	// NOTE: OAuthHandler requires a TokenStore, encryption key, and state validator
+	// which depend on store initialization. For now, register a placeholder that
+	// returns 503 until the full pipeline is wired (Epic 10: Web Setup Wizard).
+	srv.Router().Get("/oauth/callback", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"oauth not configured"}`, http.StatusServiceUnavailable)
+	})
 
 	// Graceful shutdown
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)

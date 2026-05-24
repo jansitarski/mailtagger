@@ -1,8 +1,8 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -86,7 +86,7 @@ func (h *OAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange code for token
-	token, err := h.oauthConfig.Exchange(context.Background(), code)
+	token, err := h.oauthConfig.Exchange(r.Context(), code)
 	if err != nil {
 		h.logger.Error("failed to exchange code for token", "error", err)
 		h.respondError(w, http.StatusInternalServerError, "failed to exchange authorization code")
@@ -119,7 +119,7 @@ func (h *OAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.logger.Info("updated oauth token", "email", email)
-	} else {
+	} else if errors.Is(err, store.ErrAccountNotFound) {
 		// Insert new account
 		if _, err := h.store.InsertAccount(email, encrypted); err != nil {
 			h.logger.Error("failed to insert account", "email", email, "error", err)
@@ -127,6 +127,11 @@ func (h *OAuthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.logger.Info("stored new oauth token", "email", email)
+	} else {
+		// Unexpected database error
+		h.logger.Error("failed to lookup account", "email", email, "error", err)
+		h.respondError(w, http.StatusInternalServerError, "failed to store token")
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

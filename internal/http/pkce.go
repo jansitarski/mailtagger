@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -50,9 +51,9 @@ func AuthCodeURLWithPKCE(cfg *oauth2.Config, state string, pkce *PKCEParams) str
 }
 
 // ExchangeCodeWithPKCE exchanges an authorization code for a token using the PKCE verifier.
-func ExchangeCodeWithPKCE(cfg *oauth2.Config, code string, verifier string) (*oauth2.Token, error) {
+func ExchangeCodeWithPKCE(ctx context.Context, cfg *oauth2.Config, code string, verifier string) (*oauth2.Token, error) {
 	return cfg.Exchange(
-		oauth2.NoContext,
+		ctx,
 		code,
 		oauth2.SetAuthURLParam("code_verifier", verifier),
 	)

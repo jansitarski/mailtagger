@@ -25,7 +25,7 @@ func newMockTokenStore() *mockTokenStore {
 func (m *mockTokenStore) GetAccountByEmail(email string) (*store.Account, error) {
 	acc, ok := m.accounts[email]
 	if !ok {
-		return nil, fmt.Errorf("account not found")
+		return nil, store.ErrAccountNotFound
 	}
 	return acc, nil
 }

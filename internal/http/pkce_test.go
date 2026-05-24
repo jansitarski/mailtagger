@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
@@ -102,7 +103,7 @@ func TestExchangeCodeWithPKCE(t *testing.T) {
 		},
 	}
 
-	token, err := ExchangeCodeWithPKCE(cfg, "test-code", "my-verifier")
+	token, err := ExchangeCodeWithPKCE(context.Background(), cfg, "test-code", "my-verifier")
 	if err != nil {
 		t.Fatalf("exchange failed: %v", err)
 	}
