@@ -41,9 +41,17 @@ func NewLabelManager(client *Client, cache LabelCache, accountID int64) *LabelMa
 
 // SyncLabels fetches all labels from Gmail and updates the cache.
 // This should be called on startup to ensure the cache is up-to-date.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (lm *LabelManager) SyncLabels(ctx context.Context) error {
-	// Fetch all labels from Gmail
-	resp, err := lm.client.service.Users.Labels.List("me").Context(ctx).Do()
+	var resp *gmail.ListLabelsResponse
+
+	// Execute with rate limiting and retry
+	err := lm.client.rateLimiter.Do(ctx, func() error {
+		var apiErr error
+		resp, apiErr = lm.client.service.Users.Labels.List("me").Context(ctx).Do()
+		return apiErr
+	})
+
 	if err != nil {
 		return fmt.Errorf("failed to list labels: %w", err)
 	}
@@ -75,6 +83,7 @@ func (lm *LabelManager) ListLabels(ctx context.Context) ([]CachedLabel, error) {
 
 // CreateLabel creates a new label in Gmail and caches it.
 // Returns the label ID.
+// Uses rate limiting and automatic retry on 429/5xx errors.
 func (lm *LabelManager) CreateLabel(ctx context.Context, labelName string) (string, error) {
 	// Create the label in Gmail
 	label := &gmail.Label{
@@ -83,7 +92,15 @@ func (lm *LabelManager) CreateLabel(ctx context.Context, labelName string) (stri
 		MessageListVisibility:  "show",
 	}
 
-	created, err := lm.client.service.Users.Labels.Create("me", label).Context(ctx).Do()
+	var created *gmail.Label
+
+	// Execute with rate limiting and retry
+	err := lm.client.rateLimiter.Do(ctx, func() error {
+		var apiErr error
+		created, apiErr = lm.client.service.Users.Labels.Create("me", label).Context(ctx).Do()
+		return apiErr
+	})
+
 	if err != nil {
 		return "", fmt.Errorf("failed to create label %s: %w", labelName, err)
 	}
