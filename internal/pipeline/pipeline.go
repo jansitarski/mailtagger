@@ -129,8 +129,64 @@ func (p *Pipeline) tick(ctx context.Context) error {
 }
 
 // processAccount processes a single account during a tick cycle.
-// This is a placeholder that will be implemented in task 3.
+// It fetches history to get new message IDs and processes them.
 func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) error {
-	// Will be implemented in task mailtagger-6zk.3
+	// Create Gmail client for this account
+	client, err := p.gmailFactory.NewClient(ctx, account)
+	if err != nil {
+		return err
+	}
+
+	// Fetch new message IDs using history sync
+	messageIDs, newHistoryID, err := p.fetchNewMessageIDs(ctx, client, account)
+	if err != nil {
+		return err
+	}
+
+	// Process each message
+	for _, msgID := range messageIDs {
+		if err := p.processMessage(ctx, client, account, msgID); err != nil {
+			// Log error but continue with other messages
+			_ = err
+			continue
+		}
+	}
+
+	// Update history ID if we got new messages
+	if newHistoryID != "" && newHistoryID != account.HistoryID {
+		if err := p.store.UpdateHistoryID(account.ID, newHistoryID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// fetchNewMessageIDs fetches new message IDs for an account using history sync.
+// If no history ID exists, it bootstraps by getting the current history ID.
+func (p *Pipeline) fetchNewMessageIDs(ctx context.Context, client *gmail.Client, account *store.Account) ([]string, string, error) {
+	// If no history ID, bootstrap to get the current one
+	if account.HistoryID == "" {
+		historyID, err := client.GetCurrentHistoryID(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		// Return empty messages - we'll start processing from next tick
+		return nil, historyID, nil
+	}
+
+	// Sync history to get new messages
+	result, err := client.SyncHistory(ctx, account.HistoryID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return result.MessageIDs, result.NextHistoryID, nil
+}
+
+// processMessage processes a single message. This is a placeholder that will
+// be implemented in task 5 with the full pipeline (classify, label, record).
+func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, account *store.Account, messageID string) error {
+	// Will be implemented in task mailtagger-6zk.5
 	return nil
 }
