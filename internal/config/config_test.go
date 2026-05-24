@@ -16,13 +16,7 @@ llm:
   max_tokens: 200
   timeout: 30s
 
-accounts:
-  - id: primary
-    email: test@gmail.com
-    client_secret_path: /path/to/client_secret.json
-    token_path: /path/to/token.json
-    poll_interval: 5m
-    query: "is:unread"
+poll_interval: 5m
 
 store:
   type: sqlite
@@ -58,8 +52,8 @@ categories:
 		t.Errorf("Expected model 'gpt-4', got %q", cfg.LLM.Model)
 	}
 
-	if len(cfg.Accounts) != 1 {
-		t.Errorf("Expected 1 account, got %d", len(cfg.Accounts))
+	if cfg.PollInterval != "5m" {
+		t.Errorf("Expected poll_interval '5m', got %q", cfg.PollInterval)
 	}
 
 	if len(cfg.Categories) != 1 {
@@ -82,12 +76,7 @@ llm:
   max_tokens: 200
   timeout: 30s
 
-accounts:
-  - id: primary
-    email: test@gmail.com
-    client_secret_path: /path/to/client_secret.json
-    token_path: /path/to/token.json
-    poll_interval: 5m
+poll_interval: 5m
 
 store:
   type: sqlite
@@ -134,13 +123,6 @@ llm:
   max_tokens: 200
   timeout: 30s
 
-accounts:
-  - id: primary
-    email: test@gmail.com
-    client_secret_path: /path/to/client_secret.json
-    token_path: /path/to/token.json
-    poll_interval: 5m
-
 store:
   type: sqlite
   path: /tmp/test.db
@@ -183,15 +165,7 @@ func TestValidate_ValidConfig(t *testing.T) {
 			MaxTokens:   200,
 			Timeout:     "30s",
 		},
-		Accounts: []AccountConfig{
-			{
-				ID:               "primary",
-				Email:            "test@gmail.com",
-				ClientSecretPath: "/path/to/secret.json",
-				TokenPath:        "/path/to/token.json",
-				PollInterval:     "5m",
-			},
-		},
+		PollInterval: "5m",
 		Store: StoreConfig{
 			Type: "sqlite",
 			Path: "/tmp/state.db",
@@ -221,14 +195,6 @@ func TestValidate_MissingProvider(t *testing.T) {
 			Model:  "gpt-4",
 			APIKey: "sk-test",
 		},
-		Accounts: []AccountConfig{
-			{
-				ID:               "primary",
-				Email:            "test@gmail.com",
-				ClientSecretPath: "/path/to/secret.json",
-				TokenPath:        "/path/to/token.json",
-			},
-		},
 		Store: StoreConfig{
 			Type: "sqlite",
 			Path: "/tmp/state.db",
@@ -257,14 +223,6 @@ func TestValidate_InvalidProvider(t *testing.T) {
 			Provider: "invalid-provider",
 			Model:    "gpt-4",
 			APIKey:   "sk-test",
-		},
-		Accounts: []AccountConfig{
-			{
-				ID:               "primary",
-				Email:            "test@gmail.com",
-				ClientSecretPath: "/path/to/secret.json",
-				TokenPath:        "/path/to/token.json",
-			},
 		},
 		Store: StoreConfig{
 			Type: "sqlite",
@@ -296,14 +254,6 @@ func TestValidate_InvalidTemperature(t *testing.T) {
 			APIKey:      "sk-test",
 			Temperature: 1.5, // Invalid: > 1.0
 		},
-		Accounts: []AccountConfig{
-			{
-				ID:               "primary",
-				Email:            "test@gmail.com",
-				ClientSecretPath: "/path/to/secret.json",
-				TokenPath:        "/path/to/token.json",
-			},
-		},
 		Store: StoreConfig{
 			Type: "sqlite",
 			Path: "/tmp/state.db",
@@ -326,50 +276,12 @@ func TestValidate_InvalidTemperature(t *testing.T) {
 	}
 }
 
-func TestValidate_NoAccounts(t *testing.T) {
-	cfg := &Config{
-		LLM: LLMConfig{
-			Provider: "openai",
-			Model:    "gpt-4",
-			APIKey:   "sk-test",
-		},
-		Accounts: []AccountConfig{}, // Empty
-		Store: StoreConfig{
-			Type: "sqlite",
-			Path: "/tmp/state.db",
-		},
-		HTTP: HTTPConfig{
-			Addr: ":8080",
-		},
-		Categories: []Category{
-			{
-				Name:        "newsletter",
-				Label:       "automated/newsletter",
-				Description: "Marketing emails",
-			},
-		},
-	}
-
-	err := cfg.Validate()
-	if err == nil {
-		t.Error("Expected validation error for no accounts, got nil")
-	}
-}
-
 func TestValidate_NoCategories(t *testing.T) {
 	cfg := &Config{
 		LLM: LLMConfig{
 			Provider: "openai",
 			Model:    "gpt-4",
 			APIKey:   "sk-test",
-		},
-		Accounts: []AccountConfig{
-			{
-				ID:               "primary",
-				Email:            "test@gmail.com",
-				ClientSecretPath: "/path/to/secret.json",
-				TokenPath:        "/path/to/token.json",
-			},
 		},
 		Store: StoreConfig{
 			Type: "sqlite",
@@ -395,14 +307,6 @@ func TestValidate_InvalidDuration(t *testing.T) {
 			APIKey:   "sk-test",
 			Timeout:  "invalid-duration",
 		},
-		Accounts: []AccountConfig{
-			{
-				ID:               "primary",
-				Email:            "test@gmail.com",
-				ClientSecretPath: "/path/to/secret.json",
-				TokenPath:        "/path/to/token.json",
-			},
-		},
 		Store: StoreConfig{
 			Type: "sqlite",
 			Path: "/tmp/state.db",
@@ -425,6 +329,36 @@ func TestValidate_InvalidDuration(t *testing.T) {
 	}
 }
 
+func TestValidate_InvalidPollInterval(t *testing.T) {
+	cfg := &Config{
+		LLM: LLMConfig{
+			Provider: "openai",
+			Model:    "gpt-4",
+			APIKey:   "sk-test",
+		},
+		PollInterval: "invalid",
+		Store: StoreConfig{
+			Type: "sqlite",
+			Path: "/tmp/state.db",
+		},
+		HTTP: HTTPConfig{
+			Addr: ":8080",
+		},
+		Categories: []Category{
+			{
+				Name:        "newsletter",
+				Label:       "automated/newsletter",
+				Description: "Marketing emails",
+			},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Error("Expected validation error for invalid poll_interval, got nil")
+	}
+}
+
 func TestValidate_OllamaNoAPIKey(t *testing.T) {
 	// Ollama should not require an API key
 	cfg := &Config{
@@ -432,14 +366,6 @@ func TestValidate_OllamaNoAPIKey(t *testing.T) {
 			Provider: "ollama",
 			Model:    "llama2",
 			// APIKey is intentionally empty
-		},
-		Accounts: []AccountConfig{
-			{
-				ID:               "primary",
-				Email:            "test@gmail.com",
-				ClientSecretPath: "/path/to/secret.json",
-				TokenPath:        "/path/to/token.json",
-			},
 		},
 		Store: StoreConfig{
 			Type: "sqlite",

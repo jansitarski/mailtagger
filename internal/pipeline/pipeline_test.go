@@ -248,9 +248,7 @@ func TestPipelineRunContextCancellation(t *testing.T) {
 		Categories: []config.Category{
 			{Name: "Others", Label: "AI/Others", Description: "Other emails"},
 		},
-		Accounts: []config.AccountConfig{
-			{ID: "test", Email: "test@example.com", PollInterval: "100ms"},
-		},
+		PollInterval: "100ms",
 	}
 
 	mockLLM := &mockLLM{category: "Others", confidence: 0.9}

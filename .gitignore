@@ -34,6 +34,7 @@ Thumbs.db
 .env.local
 *.pem
 client_secret*.json
+config.yaml
 
 # SQLite databases (local dev)
 *.db

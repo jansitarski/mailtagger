@@ -41,13 +41,6 @@ func expandEnvVars(cfg *Config) {
 	cfg.LLM.APIKey = expandString(cfg.LLM.APIKey)
 	cfg.LLM.BaseURL = expandString(cfg.LLM.BaseURL)
 
-	// Account configs
-	for i := range cfg.Accounts {
-		cfg.Accounts[i].ClientSecretPath = expandString(cfg.Accounts[i].ClientSecretPath)
-		cfg.Accounts[i].TokenPath = expandString(cfg.Accounts[i].TokenPath)
-		cfg.Accounts[i].Query = expandString(cfg.Accounts[i].Query)
-	}
-
 	// Store config
 	cfg.Store.Path = expandString(cfg.Store.Path)
 }

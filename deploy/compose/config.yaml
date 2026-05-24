@@ -16,25 +16,32 @@ label_prefix: "AI/"
 
 categories:
   - name: Work
+    label: AI/Work
     description: "Jobs, coworkers, meetings, projects, professional tasks"
   - name: Personal
+    label: AI/Personal
     description: "Friends, family, general personal life"
   - name: Finance
+    label: AI/Finance
     description: "Banks, invoices, receipts, bills, payment confirmations"
   - name: Shopping
+    label: AI/Shopping
     description: "Order confirmations, promotions, store updates"
   - name: Travel
+    label: AI/Travel
     description: "Booking confirmations, tickets, hotels, itineraries"
   - name: Newsletters
+    label: AI/Newsletters
     description: "Recurring marketing or subscription emails"
   - name: System
+    label: AI/System
     description: "One-time codes, activations, registrations"
   - name: Alerts
+    label: AI/Alerts
     description: "Security or change notifications about accounts/infrastructure"
   - name: Others
+    label: AI/Others
     description: "Relevant emails that don't clearly fit elsewhere"
-
-accounts: []
 
 store:
   path: /var/lib/mailtagger/state.db
