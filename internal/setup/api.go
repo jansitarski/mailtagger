@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/jansitarski/mailtagger/internal/config"
 )
 
@@ -306,8 +308,13 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// For now, just log the config
-	// TODO: Actually save the config file and restart in normal mode
+	// Generate YAML config
+	yamlBytes, err := yaml.Marshal(cfg)
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "failed to generate config")
+		return
+	}
+
 	h.logger.Info("setup complete requested",
 		"provider", req.LLMProvider,
 		"model", req.LLMModel,
@@ -316,7 +323,8 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 
 	h.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "ok",
-		"message": "Configuration saved. Please restart mailtagger.",
+		"message": "Configuration generated. Save the config below and restart mailtagger with --config pointing to it.",
+		"config":  string(yamlBytes),
 	})
 }
 

@@ -701,27 +701,73 @@
         async function saveConfiguration() {
             try {
                 elements.btnNext.disabled = true;
-                elements.btnNext.textContent = 'Saving...';
+                elements.btnNext.textContent = 'Generating config...';
                 
-                // This will call the backend API to save configuration
+                // This will call the backend API to generate configuration
                 const response = await fetch('/setup/api/complete', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(state.data)
                 });
                 
+                const result = await response.json();
+                
                 if (!response.ok) {
-                    throw new Error('Failed to save configuration');
+                    throw new Error(result.error || 'Failed to save configuration');
                 }
                 
-                // Redirect to success page or main app
-                window.location.href = '/';
+                // Show success with config
+                elements.pageContent.innerHTML = `
+                    <div class="text-center">
+                        <div class="text-6xl mb-4">✅</div>
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">Setup Complete!</h2>
+                        <p class="text-gray-600 mb-6">${result.message}</p>
+                        
+                        <div class="text-left bg-gray-100 rounded-lg p-4 mb-6">
+                            <div class="flex justify-between items-center mb-2">
+                                <h3 class="font-semibold text-gray-900">Generated config.yaml</h3>
+                                <button id="btn-copy-config" class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                                    Copy
+                                </button>
+                            </div>
+                            <pre id="config-yaml" class="text-sm text-gray-700 overflow-auto max-h-64 whitespace-pre-wrap">${escapeHtml(result.config)}</pre>
+                        </div>
+                        
+                        <div class="bg-yellow-50 rounded-lg p-4 text-left">
+                            <h3 class="font-semibold text-yellow-900 mb-2">Next Steps:</h3>
+                            <ol class="text-yellow-800 list-decimal list-inside space-y-1">
+                                <li>Save the config above to a file (e.g., <code>/etc/mailtagger/config.yaml</code>)</li>
+                                <li>Run: <code>mailtagger serve --config /path/to/config.yaml --client-secret /path/to/client_secret.json</code></li>
+                            </ol>
+                        </div>
+                    </div>
+                `;
+                
+                // Hide navigation buttons
+                elements.btnBack.classList.add('hidden');
+                elements.btnNext.classList.add('hidden');
+                
+                // Add copy button handler
+                document.getElementById('btn-copy-config').addEventListener('click', () => {
+                    navigator.clipboard.writeText(result.config);
+                    document.getElementById('btn-copy-config').textContent = 'Copied!';
+                    setTimeout(() => {
+                        document.getElementById('btn-copy-config').textContent = 'Copy';
+                    }, 2000);
+                });
                 
             } catch (err) {
                 showError('Failed to save: ' + err.message);
                 elements.btnNext.disabled = false;
                 elements.btnNext.textContent = 'Save & Start';
             }
+        }
+
+        // Helper to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         // Error handling
