@@ -1,0 +1,40 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mailtagger.fullname" . }}
+  labels:
+    {{- include "mailtagger.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mailtagger.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic to the HTTP port
+    - ports:
+        - protocol: TCP
+          port: 8080
+      from:
+        # Allow from same namespace
+        - podSelector: {}
+        {{- range .Values.networkPolicy.ingressNamespaces }}
+        # Allow from specified namespaces (e.g., monitoring)
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+  egress:
+    # Allow DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow HTTPS for external APIs (Gmail, LLM providers)
+    - ports:
+        - protocol: TCP
+          port: 443
+{{- end }}
