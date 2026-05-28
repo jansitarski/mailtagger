@@ -23,6 +23,7 @@ import (
 	mthttp "github.com/jansitarski/mailtagger/internal/http"
 	"github.com/jansitarski/mailtagger/internal/logging"
 	"github.com/jansitarski/mailtagger/internal/pipeline"
+	"github.com/jansitarski/mailtagger/internal/setup"
 	"github.com/jansitarski/mailtagger/internal/store"
 )
 
@@ -71,9 +72,8 @@ func newServeCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&configPath, "config", "c", "/etc/mailtagger/config.yaml", "path to config file")
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP server listen address (overrides config)")
-	cmd.Flags().StringVar(&clientSecretPath, "client-secret", "", "path to OAuth client_secret.json (required for Gmail API)")
+	cmd.Flags().StringVar(&clientSecretPath, "client-secret", "", "path to OAuth client_secret.json (required in normal mode)")
 	cmd.Flags().StringVar(&encryptionKeyHex, "encryption-key", "", "32-byte encryption key in hex (or use MAILTAGGER_ENCRYPTION_KEY env var)")
-	cmd.MarkFlagRequired("client-secret")
 
 	return cmd
 }
@@ -90,10 +90,13 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 
 	slog.Info("starting mailtagger", "version", version, "config", configPath)
 
-	// Get encryption key
-	encryptionKey, err := getEncryptionKey(encryptionKeyHex)
-	if err != nil {
-		return err
+	// Get encryption key (optional in setup mode)
+	var encryptionKey []byte
+	if encryptionKeyHex != "" || os.Getenv("MAILTAGGER_ENCRYPTION_KEY") != "" {
+		encryptionKey, err = getEncryptionKey(encryptionKeyHex)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Open the store
@@ -108,15 +111,103 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 		return fmt.Errorf("failed to migrate store: %w", err)
 	}
 
-	// Check for accounts
+	// Check for accounts to determine mode
+	hasAccounts, err := st.HasAccounts()
+	if err != nil {
+		return fmt.Errorf("failed to check accounts: %w", err)
+	}
+
+	if !hasAccounts {
+		return runSetupMode(ctx, cfg, addrOverride, st, logger)
+	}
+
+	// Encryption key is required in normal mode
+	if encryptionKey == nil {
+		return fmt.Errorf("encryption key required: use --encryption-key flag or MAILTAGGER_ENCRYPTION_KEY env var")
+	}
+
+	// Client secret is required in normal mode
+	if clientSecretPath == "" {
+		return fmt.Errorf("client secret required: use --client-secret flag")
+	}
+
+	return runNormalMode(ctx, cfg, addrOverride, clientSecretPath, encryptionKey, st, logger)
+}
+
+// runSetupMode runs the server in setup wizard mode (no pipeline, serves /setup).
+func runSetupMode(ctx context.Context, cfg *config.Config, addrOverride string, st *store.Store, logger *slog.Logger) error {
+	slog.Info("starting in setup mode (no accounts found)")
+
+	// Override addr from flag if set
+	httpCfg := cfg.HTTP
+	if addrOverride != "" {
+		httpCfg.Addr = addrOverride
+	}
+
+	// Create HTTP server
+	srv, err := mthttp.New(httpCfg, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create http server: %w", err)
+	}
+
+	// Create setup handler
+	setupHandler := setup.NewHandler(st, logger)
+
+	// Register /setup routes
+	srv.Router().Get("/setup", setupHandler.ServeHTTP)
+	srv.Router().Get("/setup/*", setupHandler.ServeHTTP)
+
+	// Register /healthz (returns healthy but indicates setup mode)
+	srv.Router().Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"setup_mode","message":"mailtagger is running in setup mode"}`))
+	})
+
+	// Register /metrics (gated by config)
+	if httpCfg.MetricsEnabled {
+		srv.Router().Handle("/metrics", mthttp.MetricsHandler())
+	}
+
+	// Redirect root to /setup
+	srv.Router().Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/setup", http.StatusTemporaryRedirect)
+	})
+
+	// Graceful shutdown
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Start HTTP server
+	httpErrCh := make(chan error, 1)
+	go func() {
+		httpErrCh <- srv.Start()
+	}()
+
+	// Wait for shutdown signal or error
+	select {
+	case <-ctx.Done():
+		slog.Info("shutdown signal received")
+		if err := srv.Shutdown(10 * time.Second); err != nil {
+			slog.Error("server shutdown error", "error", err)
+		}
+	case err := <-httpErrCh:
+		if err != nil {
+			return fmt.Errorf("http server error: %w", err)
+		}
+	}
+
+	slog.Info("server stopped")
+	return nil
+}
+
+// runNormalMode runs the server in normal mode (pipeline running, serves app).
+func runNormalMode(ctx context.Context, cfg *config.Config, addrOverride, clientSecretPath string, encryptionKey []byte, st *store.Store, logger *slog.Logger) error {
 	accounts, err := st.ListAccounts()
 	if err != nil {
 		return fmt.Errorf("failed to list accounts: %w", err)
 	}
-	if len(accounts) == 0 {
-		return fmt.Errorf("no accounts found; run 'mailtagger auth' first to add a Gmail account")
-	}
-	slog.Info("loaded accounts", "count", len(accounts))
+	slog.Info("starting in normal mode", "accounts", len(accounts))
 
 	// Create LLM model
 	llmModel, err := classifier.NewModel(ctx, cfg.LLM)

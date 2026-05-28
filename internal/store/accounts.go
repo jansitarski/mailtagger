@@ -125,3 +125,23 @@ func (s *Store) UpdateToken(accountID int64, encryptedToken []byte) error {
 	}
 	return nil
 }
+
+// HasAccounts returns true if there is at least one account in the database.
+func (s *Store) HasAccounts() (bool, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM accounts").Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("failed to count accounts: %w", err)
+	}
+	return count > 0, nil
+}
+
+// AccountCount returns the number of accounts in the database.
+func (s *Store) AccountCount() (int, error) {
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM accounts").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count accounts: %w", err)
+	}
+	return count, nil
+}
