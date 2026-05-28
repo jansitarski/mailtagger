@@ -517,17 +517,30 @@
         };
 
         // File handling for client_secret.json
-        function handleFile(file) {
+        async function handleFile(file) {
             if (!file || !file.name.endsWith('.json')) {
                 showError('Please upload a JSON file');
                 return;
             }
             
             const reader = new FileReader();
-            reader.onload = (e) => {
+            reader.onload = async (e) => {
                 try {
                     const data = JSON.parse(e.target.result);
                     if (data.installed || data.web) {
+                        // Upload to backend
+                        const response = await fetch('/setup/api/client-secret', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: e.target.result
+                        });
+                        
+                        const result = await response.json();
+                        if (!response.ok) {
+                            showError(result.error || 'Failed to upload client secret');
+                            return;
+                        }
+                        
                         const clientInfo = data.installed || data.web;
                         state.data.clientSecret = data;
                         
@@ -546,9 +559,35 @@
         }
 
         // OAuth flow
-        function startOAuthFlow() {
-            // This will be implemented by the backend API
-            showError('OAuth flow will be implemented with backend API');
+        async function startOAuthFlow() {
+            try {
+                const response = await fetch('/setup/api/oauth/start');
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    showError(result.error || 'Failed to start OAuth flow');
+                    return;
+                }
+                
+                // Redirect to Google's authorization page
+                window.location.href = result.auth_url;
+            } catch (err) {
+                showError('Failed to start OAuth: ' + err.message);
+            }
+        }
+
+        // Check OAuth status on page load (for callback redirect)
+        async function checkOAuthStatus() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('oauth_success') === 'true') {
+                state.data.gmailAuthorized = true;
+                // Clean URL
+                window.history.replaceState({}, '', '/setup');
+            }
+            if (params.get('oauth_error')) {
+                showError('OAuth error: ' + params.get('oauth_error'));
+                window.history.replaceState({}, '', '/setup');
+            }
         }
 
         // Test LLM connection
@@ -557,12 +596,25 @@
             resultEl.textContent = 'Testing...';
             resultEl.className = 'ml-2 text-gray-600';
             
-            // This will call the backend API
             try {
-                // Placeholder - will be implemented with backend
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                resultEl.textContent = '✓ Connection successful';
-                resultEl.className = 'ml-2 text-green-600';
+                const response = await fetch('/setup/api/llm/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        provider: state.data.llmProvider,
+                        api_key: state.data.llmApiKey,
+                        model: state.data.llmModel
+                    })
+                });
+                
+                const result = await response.json();
+                if (response.ok) {
+                    resultEl.textContent = '✓ Connection successful';
+                    resultEl.className = 'ml-2 text-green-600';
+                } else {
+                    resultEl.textContent = '✗ ' + (result.error || 'Failed');
+                    resultEl.className = 'ml-2 text-red-600';
+                }
             } catch (err) {
                 resultEl.textContent = '✗ ' + err.message;
                 resultEl.className = 'ml-2 text-red-600';
@@ -683,10 +735,15 @@
         }
 
         // Initialize on DOM ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', init);
-        } else {
+        async function initAsync() {
+            await checkOAuthStatus();
             init();
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initAsync);
+        } else {
+            initAsync();
         }
     })();
     </script>

@@ -80,6 +80,7 @@ func NewAPIHandler(cfg APIHandlerConfig) *APIHandler {
 func (h *APIHandler) Routes(r interface{ Post(pattern string, handler http.HandlerFunc); Get(pattern string, handler http.HandlerFunc) }) {
 	r.Post("/client-secret", h.handleClientSecret)
 	r.Get("/oauth/start", h.handleOAuthStart)
+	r.Get("/oauth/callback", h.handleOAuthCallback)
 	r.Get("/oauth/status", h.handleOAuthStatus)
 	r.Post("/llm/test", h.handleLLMTest)
 	r.Post("/complete", h.handleComplete)
@@ -155,6 +156,47 @@ func (h *APIHandler) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
 		"auth_url": authURL,
 		"state":    h.oauthState,
 	})
+}
+
+// handleOAuthCallback handles the OAuth callback from Google.
+func (h *APIHandler) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
+	// Check for error from OAuth provider
+	if errParam := r.URL.Query().Get("error"); errParam != "" {
+		desc := r.URL.Query().Get("error_description")
+		h.logger.Error("oauth provider returned error", "error", errParam, "description", desc)
+		// Redirect back to setup with error
+		http.Redirect(w, r, "/setup?oauth_error="+errParam, http.StatusFound)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Redirect(w, r, "/setup?oauth_error=missing_code", http.StatusFound)
+		return
+	}
+
+	state := r.URL.Query().Get("state")
+	if state == "" || state != h.oauthState {
+		h.logger.Warn("oauth state mismatch", "expected", h.oauthState, "got", state)
+		http.Redirect(w, r, "/setup?oauth_error=state_mismatch", http.StatusFound)
+		return
+	}
+
+	if h.clientSecret == nil {
+		http.Redirect(w, r, "/setup?oauth_error=no_client_secret", http.StatusFound)
+		return
+	}
+
+	// For now, just mark as authorized
+	// In a full implementation, we would:
+	// 1. Exchange code for tokens
+	// 2. Get user's email from Gmail API
+	// 3. Store the encrypted token
+	h.authorizedEmail = "user@gmail.com" // Placeholder
+	h.logger.Info("oauth callback received", "code_length", len(code))
+
+	// Redirect back to setup wizard
+	http.Redirect(w, r, "/setup?oauth_success=true", http.StatusFound)
 }
 
 // handleOAuthStatus returns the current OAuth status.
