@@ -39,6 +39,5 @@ data:
     {{- range .Values.config.categories }}
       - name: {{ .name | quote }}
         label: {{ .label | quote }}
-        description: |
-          {{ .description | nindent 10 | trim }}
+        description: {{ .description | quote }}
     {{- end }}
