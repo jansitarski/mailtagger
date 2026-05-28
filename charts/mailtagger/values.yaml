@@ -167,3 +167,13 @@ networkPolicy:
   enabled: false
   # Allow ingress from these namespaces (for Prometheus scraping)
   ingressNamespaces: []
+  # Additional egress rules (e.g., for self-hosted LLM providers like Ollama)
+  # additionalEgress:
+  #   - ports:
+  #       - protocol: TCP
+  #         port: 11434
+  #     to:
+  #       - podSelector:
+  #           matchLabels:
+  #             app: ollama
+  additionalEgress: []
