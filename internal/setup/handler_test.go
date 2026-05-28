@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -31,13 +32,18 @@ func TestHandler_NoAccounts_ServesWizard(t *testing.T) {
 	}
 
 	contentType := w.Header().Get("Content-Type")
-	if contentType != "text/html; charset=utf-8" {
+	if !strings.Contains(contentType, "text/html") {
 		t.Errorf("expected Content-Type text/html, got %s", contentType)
 	}
 
 	body := w.Body.String()
 	if len(body) == 0 {
 		t.Error("expected non-empty body")
+	}
+
+	// Check it's the SPA
+	if !strings.Contains(body, "mailtagger") {
+		t.Error("expected body to contain 'mailtagger'")
 	}
 }
 

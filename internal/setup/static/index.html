@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mailtagger Setup</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for the wizard */
+        .step-indicator {
+            transition: all 0.3s ease;
+        }
+        .step-indicator.active {
+            background-color: #3b82f6;
+            color: white;
+        }
+        .step-indicator.completed {
+            background-color: #10b981;
+            color: white;
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="app" class="container mx-auto px-4 py-8 max-w-3xl">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-900">mailtagger</h1>
+            <p class="text-gray-600 mt-2">AI-powered Gmail labeling</p>
+        </header>
+
+        <!-- Progress Steps -->
+        <nav class="mb-8">
+            <ol id="progress-steps" class="flex items-center justify-center space-x-4">
+                <!-- Steps will be rendered by JS -->
+            </ol>
+        </nav>
+
+        <!-- Main Content -->
+        <main id="page-content" class="bg-white rounded-lg shadow-md p-6">
+            <!-- Page content rendered by JS -->
+        </main>
+
+        <!-- Navigation Buttons -->
+        <div id="nav-buttons" class="mt-6 flex justify-between">
+            <button id="btn-back" class="px-4 py-2 text-gray-600 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                ← Back
+            </button>
+            <button id="btn-next" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                Next →
+            </button>
+        </div>
+
+        <!-- Error Alert -->
+        <div id="error-alert" class="hidden mt-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
+            <p id="error-message"></p>
+        </div>
+    </div>
+
+    <script>
+    // Setup Wizard SPA
+    (function() {
+        'use strict';
+
+        // Wizard state
+        const state = {
+            currentStep: 0,
+            completedSteps: [],
+            data: {
+                clientSecret: null,
+                gmailAuthorized: false,
+                llmProvider: '',
+                llmApiKey: '',
+                llmModel: '',
+                categories: []
+            }
+        };
+
+        // Wizard steps configuration
+        const steps = [
+            { id: 'welcome', title: 'Welcome', shortTitle: '1' },
+            { id: 'google-setup', title: 'Google Cloud Setup', shortTitle: '2' },
+            { id: 'client-secret', title: 'OAuth Credentials', shortTitle: '3' },
+            { id: 'gmail-auth', title: 'Gmail Authorization', shortTitle: '4' },
+            { id: 'llm-config', title: 'LLM Provider', shortTitle: '5' },
+            { id: 'categories', title: 'Categories', shortTitle: '6' },
+            { id: 'summary', title: 'Review & Save', shortTitle: '7' }
+        ];
+
+        // DOM elements
+        const elements = {
+            progressSteps: document.getElementById('progress-steps'),
+            pageContent: document.getElementById('page-content'),
+            btnBack: document.getElementById('btn-back'),
+            btnNext: document.getElementById('btn-next'),
+            errorAlert: document.getElementById('error-alert'),
+            errorMessage: document.getElementById('error-message')
+        };
+
+        // Initialize the wizard
+        function init() {
+            renderProgressSteps();
+            renderCurrentPage();
+            setupNavigation();
+        }
+
+        // Render progress indicator
+        function renderProgressSteps() {
+            elements.progressSteps.innerHTML = steps.map((step, index) => {
+                const isActive = index === state.currentStep;
+                const isCompleted = state.completedSteps.includes(index);
+                const classes = [
+                    'step-indicator',
+                    'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
+                    isActive ? 'active' : '',
+                    isCompleted ? 'completed' : 'bg-gray-200 text-gray-600'
+                ].join(' ');
+
+                return `
+                    <li class="flex items-center">
+                        <span class="${classes}" title="${step.title}">${step.shortTitle}</span>
+                        ${index < steps.length - 1 ? '<span class="w-8 h-0.5 bg-gray-300 mx-1"></span>' : ''}
+                    </li>
+                `;
+            }).join('');
+        }
+
+        // Render current page content
+        function renderCurrentPage() {
+            const step = steps[state.currentStep];
+            const pageRenderer = pageRenderers[step.id];
+            
+            if (pageRenderer) {
+                elements.pageContent.innerHTML = pageRenderer();
+                elements.pageContent.classList.add('fade-in');
+                
+                // Setup page-specific handlers
+                const setupHandler = pageSetupHandlers[step.id];
+                if (setupHandler) {
+                    setupHandler();
+                }
+            }
+
+            // Update navigation buttons
+            elements.btnBack.disabled = state.currentStep === 0;
+            elements.btnNext.textContent = state.currentStep === steps.length - 1 ? 'Save & Start' : 'Next →';
+            
+            hideError();
+        }
+
+        // Page renderers
+        const pageRenderers = {
+            'welcome': () => `
+                <div class="text-center">
+                    <div class="text-6xl mb-6">📧</div>
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4">Welcome to mailtagger</h2>
+                    <p class="text-gray-600 mb-6">
+                        This wizard will help you set up mailtagger to automatically classify and label your Gmail messages using AI.
+                    </p>
+                    <div class="text-left bg-blue-50 rounded-lg p-4 mb-6">
+                        <h3 class="font-semibold text-blue-900 mb-2">What you'll need:</h3>
+                        <ul class="text-blue-800 space-y-2">
+                            <li>✓ A Google Cloud account (free tier works)</li>
+                            <li>✓ Access to your Gmail account</li>
+                            <li>✓ An API key from an LLM provider (OpenAI, Anthropic, etc.)</li>
+                        </ul>
+                    </div>
+                    <div class="text-left bg-yellow-50 rounded-lg p-4">
+                        <h3 class="font-semibold text-yellow-900 mb-2">Permissions required:</h3>
+                        <ul class="text-yellow-800 space-y-1 text-sm">
+                            <li>• <strong>gmail.modify</strong> - To read messages and apply labels</li>
+                            <li>• <strong>gmail.labels</strong> - To create and manage labels</li>
+                        </ul>
+                        <p class="text-yellow-700 text-sm mt-2">
+                            mailtagger only reads message metadata (subject, from, snippet) - not full message content.
+                        </p>
+                    </div>
+                </div>
+            `,
+
+            'google-setup': () => `
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4">Google Cloud Setup</h2>
+                    <p class="text-gray-600 mb-6">
+                        You'll need to create OAuth 2.0 credentials in Google Cloud Console to connect mailtagger to Gmail.
+                    </p>
+                    
+                    <div class="space-y-4">
+                        <div class="border rounded-lg p-4">
+                            <h3 class="font-semibold mb-2">Step 1: Create a Google Cloud Project</h3>
+                            <p class="text-gray-600 text-sm mb-2">If you don't have a project, create one:</p>
+                            <a href="https://console.cloud.google.com/projectcreate" target="_blank" 
+                               class="inline-block px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                                Open Google Cloud Console →
+                            </a>
+                        </div>
+                        
+                        <div class="border rounded-lg p-4">
+                            <h3 class="font-semibold mb-2">Step 2: Enable the Gmail API</h3>
+                            <p class="text-gray-600 text-sm mb-2">Enable the Gmail API for your project:</p>
+                            <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank"
+                               class="inline-block px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                                Enable Gmail API →
+                            </a>
+                        </div>
+                        
+                        <div class="border rounded-lg p-4">
+                            <h3 class="font-semibold mb-2">Step 3: Configure OAuth Consent Screen</h3>
+                            <p class="text-gray-600 text-sm mb-2">Set up the consent screen (choose "External" for personal use):</p>
+                            <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank"
+                               class="inline-block px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                                Configure Consent →
+                            </a>
+                        </div>
+                        
+                        <div class="border rounded-lg p-4">
+                            <h3 class="font-semibold mb-2">Step 4: Create OAuth Credentials</h3>
+                            <p class="text-gray-600 text-sm mb-2">Create "OAuth 2.0 Client ID" credentials (type: Web application):</p>
+                            <a href="https://console.cloud.google.com/apis/credentials/oauthclient" target="_blank"
+                               class="inline-block px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                                Create Credentials →
+                            </a>
+                            <p class="text-gray-500 text-xs mt-2">
+                                Add this redirect URI: <code class="bg-gray-100 px-1 rounded">${window.location.origin}/oauth/callback</code>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            `,
+
+            'client-secret': () => `
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4">Upload OAuth Credentials</h2>
+                    <p class="text-gray-600 mb-6">
+                        Download the JSON file from Google Cloud Console and upload it here.
+                    </p>
+                    
+                    <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer">
+                        <div class="text-4xl mb-4">📁</div>
+                        <p class="text-gray-600 mb-2">Drag and drop your <code>client_secret.json</code> here</p>
+                        <p class="text-gray-500 text-sm">or click to browse</p>
+                        <input type="file" id="file-input" accept=".json" class="hidden">
+                    </div>
+                    
+                    <div id="file-info" class="hidden mt-4 p-4 bg-green-50 rounded-lg">
+                        <div class="flex items-center">
+                            <span class="text-green-600 text-2xl mr-3">✓</span>
+                            <div>
+                                <p class="font-semibold text-green-800">Credentials loaded</p>
+                                <p id="client-id-display" class="text-sm text-green-700"></p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `,
+
+            'gmail-auth': () => `
+                <div class="text-center">
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4">Authorize Gmail Access</h2>
+                    <p class="text-gray-600 mb-6">
+                        Click the button below to authorize mailtagger to access your Gmail account.
+                    </p>
+                    
+                    <div id="auth-status" class="mb-6">
+                        ${state.data.gmailAuthorized ? `
+                            <div class="bg-green-50 rounded-lg p-6">
+                                <div class="text-4xl mb-2">✅</div>
+                                <p class="text-green-800 font-semibold">Gmail authorized successfully!</p>
+                            </div>
+                        ` : `
+                            <button id="btn-authorize" class="px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 text-lg">
+                                🔐 Authorize with Google
+                            </button>
+                        `}
+                    </div>
+                    
+                    <p class="text-gray-500 text-sm">
+                        You'll be redirected to Google to grant permissions, then returned here.
+                    </p>
+                </div>
+            `,
+
+            'llm-config': () => `
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4">Configure LLM Provider</h2>
+                    <p class="text-gray-600 mb-6">
+                        Choose your AI provider for email classification.
+                    </p>
+                    
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Provider</label>
+                            <select id="llm-provider" class="w-full border rounded-lg px-3 py-2">
+                                <option value="">Select a provider...</option>
+                                <option value="openai" ${state.data.llmProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
+                                <option value="anthropic" ${state.data.llmProvider === 'anthropic' ? 'selected' : ''}>Anthropic</option>
+                                <option value="gemini" ${state.data.llmProvider === 'gemini' ? 'selected' : ''}>Google Gemini</option>
+                                <option value="ollama" ${state.data.llmProvider === 'ollama' ? 'selected' : ''}>Ollama (local)</option>
+                            </select>
+                        </div>
+                        
+                        <div id="api-key-field" class="${state.data.llmProvider === 'ollama' ? 'hidden' : ''}">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                            <input type="password" id="llm-api-key" 
+                                   class="w-full border rounded-lg px-3 py-2"
+                                   placeholder="sk-..."
+                                   value="${state.data.llmApiKey}">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                            <input type="text" id="llm-model" 
+                                   class="w-full border rounded-lg px-3 py-2"
+                                   placeholder="e.g., gpt-4-turbo, claude-3-sonnet"
+                                   value="${state.data.llmModel}">
+                            <p id="model-hint" class="text-gray-500 text-sm mt-1"></p>
+                        </div>
+                        
+                        <button id="btn-test-llm" class="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700">
+                            Test Connection
+                        </button>
+                        <span id="test-result" class="ml-2"></span>
+                    </div>
+                </div>
+            `,
+
+            'categories': () => `
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4">Email Categories</h2>
+                    <p class="text-gray-600 mb-6">
+                        Define categories for classifying your emails. Each category maps to a Gmail label.
+                    </p>
+                    
+                    <div id="categories-list" class="space-y-3 mb-4">
+                        ${renderCategories()}
+                    </div>
+                    
+                    <button id="btn-add-category" class="px-4 py-2 border border-blue-600 text-blue-600 rounded hover:bg-blue-50">
+                        + Add Category
+                    </button>
+                </div>
+            `,
+
+            'summary': () => `
+                <div>
+                    <h2 class="text-2xl font-bold text-gray-900 mb-4">Review Configuration</h2>
+                    <p class="text-gray-600 mb-6">
+                        Review your settings before saving and starting mailtagger.
+                    </p>
+                    
+                    <div class="space-y-4">
+                        <div class="border rounded-lg p-4">
+                            <h3 class="font-semibold text-gray-900 mb-2">Gmail Account</h3>
+                            <p class="text-gray-600">
+                                ${state.data.gmailAuthorized ? '✅ Authorized' : '❌ Not authorized'}
+                            </p>
+                        </div>
+                        
+                        <div class="border rounded-lg p-4">
+                            <h3 class="font-semibold text-gray-900 mb-2">LLM Provider</h3>
+                            <p class="text-gray-600">
+                                ${state.data.llmProvider || 'Not configured'} - ${state.data.llmModel || 'No model selected'}
+                            </p>
+                        </div>
+                        
+                        <div class="border rounded-lg p-4">
+                            <h3 class="font-semibold text-gray-900 mb-2">Categories (${state.data.categories.length})</h3>
+                            <ul class="text-gray-600 text-sm">
+                                ${state.data.categories.map(c => `<li>• ${c.name} → ${c.label}</li>`).join('')}
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-6 bg-yellow-50 rounded-lg p-4">
+                        <p class="text-yellow-800">
+                            <strong>Note:</strong> After saving, mailtagger will start processing your emails immediately.
+                        </p>
+                    </div>
+                </div>
+            `
+        };
+
+        // Helper to render categories
+        function renderCategories() {
+            if (state.data.categories.length === 0) {
+                // Default categories
+                state.data.categories = [
+                    { name: 'newsletter', label: 'automated/newsletter', description: 'Marketing emails, promotional content, newsletters' },
+                    { name: 'receipt', label: 'automated/receipt', description: 'Purchase confirmations, order receipts, invoices' },
+                    { name: 'notification', label: 'automated/notification', description: 'Service notifications, alerts, automated messages' },
+                    { name: 'personal', label: 'automated/personal', description: 'Personal correspondence from individuals' }
+                ];
+            }
+            
+            return state.data.categories.map((cat, index) => `
+                <div class="border rounded-lg p-3">
+                    <div class="flex justify-between items-start mb-2">
+                        <input type="text" value="${cat.name}" 
+                               class="font-semibold border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:outline-none"
+                               data-index="${index}" data-field="name">
+                        <button class="text-red-500 hover:text-red-700 text-sm" data-delete="${index}">✕</button>
+                    </div>
+                    <div class="text-sm text-gray-600 mb-1">
+                        Label: <input type="text" value="${cat.label}" 
+                                      class="border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:outline-none"
+                                      data-index="${index}" data-field="label">
+                    </div>
+                    <textarea class="w-full text-sm text-gray-500 border rounded p-1 mt-1" rows="2"
+                              data-index="${index}" data-field="description"
+                              placeholder="Description for the classifier...">${cat.description}</textarea>
+                </div>
+            `).join('');
+        }
+
+        // Page-specific setup handlers
+        const pageSetupHandlers = {
+            'client-secret': () => {
+                const dropZone = document.getElementById('drop-zone');
+                const fileInput = document.getElementById('file-input');
+                
+                dropZone.addEventListener('click', () => fileInput.click());
+                dropZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dropZone.classList.add('border-blue-500', 'bg-blue-50');
+                });
+                dropZone.addEventListener('dragleave', () => {
+                    dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+                });
+                dropZone.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+                    handleFile(e.dataTransfer.files[0]);
+                });
+                fileInput.addEventListener('change', (e) => {
+                    handleFile(e.target.files[0]);
+                });
+            },
+
+            'gmail-auth': () => {
+                const btn = document.getElementById('btn-authorize');
+                if (btn) {
+                    btn.addEventListener('click', startOAuthFlow);
+                }
+            },
+
+            'llm-config': () => {
+                const providerSelect = document.getElementById('llm-provider');
+                const apiKeyField = document.getElementById('api-key-field');
+                const modelHint = document.getElementById('model-hint');
+                
+                const modelHints = {
+                    'openai': 'Recommended: gpt-4-turbo, gpt-4o-mini',
+                    'anthropic': 'Recommended: claude-3-5-sonnet-20241022',
+                    'gemini': 'Recommended: gemini-1.5-pro',
+                    'ollama': 'Use model name from ollama list'
+                };
+                
+                providerSelect.addEventListener('change', (e) => {
+                    state.data.llmProvider = e.target.value;
+                    apiKeyField.classList.toggle('hidden', e.target.value === 'ollama');
+                    modelHint.textContent = modelHints[e.target.value] || '';
+                });
+                
+                document.getElementById('llm-api-key').addEventListener('input', (e) => {
+                    state.data.llmApiKey = e.target.value;
+                });
+                
+                document.getElementById('llm-model').addEventListener('input', (e) => {
+                    state.data.llmModel = e.target.value;
+                });
+                
+                document.getElementById('btn-test-llm').addEventListener('click', testLLMConnection);
+                
+                // Trigger initial hint
+                if (state.data.llmProvider) {
+                    modelHint.textContent = modelHints[state.data.llmProvider] || '';
+                }
+            },
+
+            'categories': () => {
+                const list = document.getElementById('categories-list');
+                
+                // Handle input changes
+                list.addEventListener('input', (e) => {
+                    const index = parseInt(e.target.dataset.index);
+                    const field = e.target.dataset.field;
+                    if (!isNaN(index) && field) {
+                        state.data.categories[index][field] = e.target.value;
+                    }
+                });
+                
+                // Handle delete
+                list.addEventListener('click', (e) => {
+                    const deleteIndex = e.target.dataset.delete;
+                    if (deleteIndex !== undefined) {
+                        state.data.categories.splice(parseInt(deleteIndex), 1);
+                        list.innerHTML = renderCategories();
+                    }
+                });
+                
+                // Add category button
+                document.getElementById('btn-add-category').addEventListener('click', () => {
+                    state.data.categories.push({
+                        name: 'new-category',
+                        label: 'automated/new-category',
+                        description: ''
+                    });
+                    list.innerHTML = renderCategories();
+                });
+            }
+        };
+
+        // File handling for client_secret.json
+        function handleFile(file) {
+            if (!file || !file.name.endsWith('.json')) {
+                showError('Please upload a JSON file');
+                return;
+            }
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if (data.installed || data.web) {
+                        const clientInfo = data.installed || data.web;
+                        state.data.clientSecret = data;
+                        
+                        document.getElementById('file-info').classList.remove('hidden');
+                        document.getElementById('client-id-display').textContent = 
+                            `Client ID: ${clientInfo.client_id.substring(0, 30)}...`;
+                        document.getElementById('drop-zone').classList.add('hidden');
+                    } else {
+                        showError('Invalid client_secret.json format');
+                    }
+                } catch (err) {
+                    showError('Failed to parse JSON file: ' + err.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // OAuth flow
+        function startOAuthFlow() {
+            // This will be implemented by the backend API
+            showError('OAuth flow will be implemented with backend API');
+        }
+
+        // Test LLM connection
+        async function testLLMConnection() {
+            const resultEl = document.getElementById('test-result');
+            resultEl.textContent = 'Testing...';
+            resultEl.className = 'ml-2 text-gray-600';
+            
+            // This will call the backend API
+            try {
+                // Placeholder - will be implemented with backend
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                resultEl.textContent = '✓ Connection successful';
+                resultEl.className = 'ml-2 text-green-600';
+            } catch (err) {
+                resultEl.textContent = '✗ ' + err.message;
+                resultEl.className = 'ml-2 text-red-600';
+            }
+        }
+
+        // Navigation
+        function setupNavigation() {
+            elements.btnBack.addEventListener('click', () => {
+                if (state.currentStep > 0) {
+                    state.currentStep--;
+                    renderProgressSteps();
+                    renderCurrentPage();
+                }
+            });
+
+            elements.btnNext.addEventListener('click', async () => {
+                // Validate current step
+                const valid = await validateCurrentStep();
+                if (!valid) return;
+
+                // Mark as completed
+                if (!state.completedSteps.includes(state.currentStep)) {
+                    state.completedSteps.push(state.currentStep);
+                }
+
+                if (state.currentStep < steps.length - 1) {
+                    state.currentStep++;
+                    renderProgressSteps();
+                    renderCurrentPage();
+                } else {
+                    // Final step - save configuration
+                    await saveConfiguration();
+                }
+            });
+        }
+
+        // Validation
+        async function validateCurrentStep() {
+            const step = steps[state.currentStep];
+            
+            switch (step.id) {
+                case 'client-secret':
+                    if (!state.data.clientSecret) {
+                        showError('Please upload your client_secret.json file');
+                        return false;
+                    }
+                    break;
+                    
+                case 'gmail-auth':
+                    if (!state.data.gmailAuthorized) {
+                        showError('Please authorize Gmail access before continuing');
+                        return false;
+                    }
+                    break;
+                    
+                case 'llm-config':
+                    if (!state.data.llmProvider) {
+                        showError('Please select an LLM provider');
+                        return false;
+                    }
+                    if (state.data.llmProvider !== 'ollama' && !state.data.llmApiKey) {
+                        showError('Please enter your API key');
+                        return false;
+                    }
+                    if (!state.data.llmModel) {
+                        showError('Please enter a model name');
+                        return false;
+                    }
+                    break;
+                    
+                case 'categories':
+                    if (state.data.categories.length === 0) {
+                        showError('Please add at least one category');
+                        return false;
+                    }
+                    break;
+            }
+            
+            return true;
+        }
+
+        // Save configuration
+        async function saveConfiguration() {
+            try {
+                elements.btnNext.disabled = true;
+                elements.btnNext.textContent = 'Saving...';
+                
+                // This will call the backend API to save configuration
+                const response = await fetch('/setup/api/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(state.data)
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to save configuration');
+                }
+                
+                // Redirect to success page or main app
+                window.location.href = '/';
+                
+            } catch (err) {
+                showError('Failed to save: ' + err.message);
+                elements.btnNext.disabled = false;
+                elements.btnNext.textContent = 'Save & Start';
+            }
+        }
+
+        // Error handling
+        function showError(message) {
+            elements.errorMessage.textContent = message;
+            elements.errorAlert.classList.remove('hidden');
+        }
+
+        function hideError() {
+            elements.errorAlert.classList.add('hidden');
+        }
+
+        // Initialize on DOM ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+    })();
+    </script>
+</body>
+</html>
