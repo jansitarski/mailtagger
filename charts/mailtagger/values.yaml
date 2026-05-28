@@ -102,9 +102,9 @@ config:
     # API key is stored in secret, referenced via environment variable
     # apiKey is not set here - use secret.llmApiKey instead
     baseUrl: ""
-    temperature: "0.1"
-    maxTokens: "200"
-    timeout: 30s
+    temperature: 0.1
+    maxTokens: 200
+    timeout: "30s"
 
   # Poll interval for Gmail
   pollInterval: 5m
