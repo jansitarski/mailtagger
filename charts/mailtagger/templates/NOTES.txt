@@ -7,7 +7,9 @@ mailtagger has been deployed!
    You need to update the secret with your Google OAuth credentials.
 
    1. Get your client_secret.json from Google Cloud Console
-   2. Base64 encode it: base64 -i client_secret.json
+   2. Base64 encode it:
+      Linux:  base64 -w 0 < client_secret.json
+      macOS:  base64 -i client_secret.json
    3. Update the secret:
       kubectl patch secret {{ include "mailtagger.secretName" . }} \
         -n {{ .Release.Namespace }} \
