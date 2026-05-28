@@ -10,6 +10,7 @@ import (
 	"github.com/jansitarski/mailtagger/internal/classifier"
 	"github.com/jansitarski/mailtagger/internal/config"
 	"github.com/jansitarski/mailtagger/internal/gmail"
+	"github.com/jansitarski/mailtagger/internal/metrics"
 	"github.com/jansitarski/mailtagger/internal/store"
 )
 
@@ -139,6 +140,10 @@ func (p *Pipeline) tick(ctx context.Context) error {
 	}
 
 	tickStart := time.Now()
+	defer func() {
+		// Record tick duration
+		metrics.TickDurationSeconds.WithLabelValues().Observe(time.Since(tickStart).Seconds())
+	}()
 
 	// Get all accounts from store
 	accounts, err := p.store.ListAccounts()
@@ -147,6 +152,9 @@ func (p *Pipeline) tick(ctx context.Context) error {
 	}
 
 	p.logger.Debug("tick starting", "account_count", len(accounts))
+
+	// Track total messages processed in this tick
+	totalProcessed := 0
 
 	// Process each account
 	for _, account := range accounts {
@@ -157,16 +165,21 @@ func (p *Pipeline) tick(ctx context.Context) error {
 		default:
 		}
 
-		if err := p.processAccount(ctx, account); err != nil {
+		processed, err := p.processAccount(ctx, account)
+		if err != nil {
 			p.logger.Error("account processing failed",
 				"account_id", account.ID,
 				"account_email", account.Email,
 				"error", err)
 			continue
 		}
+		totalProcessed += processed
 	}
 
-	p.logger.Debug("tick completed", "latency_ms", time.Since(tickStart).Milliseconds())
+	// Record tick messages processed
+	metrics.TickMessagesProcessed.WithLabelValues().Observe(float64(totalProcessed))
+
+	p.logger.Debug("tick completed", "latency_ms", time.Since(tickStart).Milliseconds(), "messages_processed", totalProcessed)
 
 	return nil
 }
@@ -174,11 +187,12 @@ func (p *Pipeline) tick(ctx context.Context) error {
 // processAccount processes a single account during a tick cycle.
 // It fetches history to get new message IDs and processes them.
 // Respects context cancellation for graceful shutdown.
-func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) error {
+// Returns the number of messages successfully processed.
+func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) (int, error) {
 	// Check for cancellation
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return 0, ctx.Err()
 	default:
 	}
 
@@ -187,13 +201,13 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 	// Create Gmail client for this account
 	client, err := p.gmailFactory.NewClient(ctx, account)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	// Fetch new message IDs using history sync
 	messageIDs, newHistoryID, err := p.fetchNewMessageIDs(ctx, client, account)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	totalMessages := len(messageIDs)
@@ -227,7 +241,7 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 				_ = p.store.UpdateHistoryID(account.ID, newHistoryID)
 			}
 			logger.Info("graceful shutdown", "processed", processed)
-			return ctx.Err()
+			return processed, ctx.Err()
 		default:
 		}
 
@@ -243,11 +257,11 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) e
 	// Update history ID if we got new messages
 	if newHistoryID != "" && newHistoryID != account.HistoryID {
 		if err := p.store.UpdateHistoryID(account.ID, newHistoryID); err != nil {
-			return err
+			return processed, err
 		}
 	}
 
-	return nil
+	return processed, nil
 }
 
 // fetchNewMessageIDs fetches new message IDs for an account using history sync.
@@ -286,6 +300,8 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 		return err
 	}
 	if skipReason != SkipReasonNone {
+		// Record skipped message metric
+		metrics.MessagesSkippedTotal.WithLabelValues(account.Email, string(skipReason)).Inc()
 		logger.Debug("message skipped", "reason", string(skipReason))
 		return nil
 	}
@@ -320,6 +336,9 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 		return err
 	}
 	classifyLatency := time.Since(classifyStart)
+
+	// Record messages processed metric
+	metrics.MessagesProcessedTotal.WithLabelValues(account.Email, decision.Category).Inc()
 
 	// 4. Get the label for the category
 	labelName := p.GetLabelForCategory(decision.Category)
