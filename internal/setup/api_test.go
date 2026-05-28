@@ -6,16 +6,55 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/jansitarski/mailtagger/internal/store"
 )
 
 // mockSetupStore implements SetupStore for testing.
 type mockSetupStore struct {
 	hasAccounts bool
 	err         error
+	accounts    map[string]*store.Account
+	nextID      int64
 }
 
 func (m *mockSetupStore) HasAccounts() (bool, error) {
 	return m.hasAccounts, m.err
+}
+
+func (m *mockSetupStore) GetAccountByEmail(email string) (*store.Account, error) {
+	if m.accounts == nil {
+		return nil, store.ErrAccountNotFound
+	}
+	acc, ok := m.accounts[email]
+	if !ok {
+		return nil, store.ErrAccountNotFound
+	}
+	return acc, nil
+}
+
+func (m *mockSetupStore) InsertAccount(email string, encryptedToken []byte) (*store.Account, error) {
+	if m.accounts == nil {
+		m.accounts = make(map[string]*store.Account)
+	}
+	m.nextID++
+	acc := &store.Account{
+		ID:             m.nextID,
+		Email:          email,
+		EncryptedToken: encryptedToken,
+	}
+	m.accounts[email] = acc
+	return acc, nil
+}
+
+func (m *mockSetupStore) UpdateToken(accountID int64, encryptedToken []byte) error {
+	for _, acc := range m.accounts {
+		if acc.ID == accountID {
+			acc.EncryptedToken = encryptedToken
+			return nil
+		}
+	}
+	return store.ErrAccountNotFound
 }
 
 func TestAPIHandler_ClientSecret_Valid(t *testing.T) {

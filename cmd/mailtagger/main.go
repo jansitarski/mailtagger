@@ -139,6 +139,14 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 func runSetupMode(ctx context.Context, cfg *config.Config, addrOverride string, st *store.Store, logger *slog.Logger) error {
 	slog.Info("starting in setup mode (no accounts found)")
 
+	// Generate encryption key for this setup session
+	encKeyBytes := make([]byte, 32)
+	if _, err := rand.Read(encKeyBytes); err != nil {
+		return fmt.Errorf("failed to generate encryption key: %w", err)
+	}
+	slog.Info("generated encryption key for setup session",
+		"key_hex", hex.EncodeToString(encKeyBytes))
+
 	// Generate setup token
 	setupToken, err := setup.GenerateToken(logger)
 	if err != nil {
@@ -169,10 +177,11 @@ func runSetupMode(ctx context.Context, cfg *config.Config, addrOverride string, 
 
 	// Create API handler for setup endpoints
 	apiHandler := setup.NewAPIHandler(setup.APIHandlerConfig{
-		Store:      st,
-		Token:      setupToken,
-		Logger:     logger,
-		ConfigPath: "", // Will be set when we implement config saving
+		Store:         st,
+		Token:         setupToken,
+		Logger:        logger,
+		EncryptionKey: encKeyBytes,
+		RunningCfg:    cfg,
 	})
 
 	// Register /setup routes with token middleware

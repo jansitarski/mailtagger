@@ -1,15 +1,22 @@
 package setup
 
 import (
+	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
+	"time"
 
+	"golang.org/x/oauth2"
 	"gopkg.in/yaml.v3"
 
+	"github.com/jansitarski/mailtagger/internal/auth"
 	"github.com/jansitarski/mailtagger/internal/config"
 )
 
@@ -18,18 +25,21 @@ type APIHandler struct {
 	store         SetupStore
 	token         *Token
 	logger        *slog.Logger
-	configPath    string
 	encryptionKey []byte
+	runningCfg    *config.Config
 
-	// State stored during setup flow
-	clientSecret  *ClientSecretData
-	oauthState    string
+	// mu protects mutable state below
+	mu              sync.Mutex
+	clientSecret    *ClientSecretData
+	oauthState      string
+	redirectURI     string
 	authorizedEmail string
 }
 
-// SetupStore extends AccountChecker with write operations needed during setup.
+// SetupStore defines the store interface needed during setup.
 type SetupStore interface {
 	AccountChecker
+	auth.TokenStore
 }
 
 // ClientSecretData represents the parsed client_secret.json structure.
@@ -60,8 +70,8 @@ type APIHandlerConfig struct {
 	Store         SetupStore
 	Token         *Token
 	Logger        *slog.Logger
-	ConfigPath    string
 	EncryptionKey []byte
+	RunningCfg    *config.Config
 }
 
 // NewAPIHandler creates a new API handler.
@@ -73,13 +83,16 @@ func NewAPIHandler(cfg APIHandlerConfig) *APIHandler {
 		store:         cfg.Store,
 		token:         cfg.Token,
 		logger:        cfg.Logger,
-		configPath:    cfg.ConfigPath,
 		encryptionKey: cfg.EncryptionKey,
+		runningCfg:    cfg.RunningCfg,
 	}
 }
 
 // Routes registers the API routes on a router.
-func (h *APIHandler) Routes(r interface{ Post(pattern string, handler http.HandlerFunc); Get(pattern string, handler http.HandlerFunc) }) {
+func (h *APIHandler) Routes(r interface {
+	Post(pattern string, handler http.HandlerFunc)
+	Get(pattern string, handler http.HandlerFunc)
+}) {
 	r.Post("/client-secret", h.handleClientSecret)
 	r.Get("/oauth/start", h.handleOAuthStart)
 	r.Get("/oauth/callback", h.handleOAuthCallback)
@@ -114,49 +127,71 @@ func (h *APIHandler) handleClientSecret(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Store the client secret in memory for the OAuth flow
+	h.mu.Lock()
 	h.clientSecret = &data
+	h.mu.Unlock()
 
-	h.logger.Info("client secret uploaded", "client_id", cfg.ClientID[:min(20, len(cfg.ClientID))]+"...")
+	truncatedID := cfg.ClientID
+	if len(truncatedID) > 20 {
+		truncatedID = truncatedID[:20]
+	}
+	h.logger.Info("client secret uploaded", "client_id", truncatedID+"...")
+
+	clientType := "installed"
+	if data.Web != nil {
+		clientType = "web"
+	}
 
 	h.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"status":    "ok",
 		"client_id": cfg.ClientID,
-		"type":      func() string { if data.Web != nil { return "web" }; return "installed" }(),
+		"type":      clientType,
 	})
 }
 
 // handleOAuthStart initiates the OAuth flow.
 func (h *APIHandler) handleOAuthStart(w http.ResponseWriter, r *http.Request) {
-	if h.clientSecret == nil {
+	h.mu.Lock()
+	cs := h.clientSecret
+	h.mu.Unlock()
+
+	if cs == nil {
 		h.respondError(w, http.StatusBadRequest, "client secret not uploaded")
 		return
 	}
 
-	cfg := h.clientSecret.GetConfig()
-	
+	cfg := cs.GetConfig()
+
 	// Generate state for CSRF protection
 	stateToken, err := GenerateToken(nil)
 	if err != nil {
 		h.respondError(w, http.StatusInternalServerError, "failed to generate state")
 		return
 	}
-	h.oauthState = stateToken.Value()
 
 	// Determine redirect URI
 	redirectURI := fmt.Sprintf("%s/setup/api/oauth/callback", getBaseURL(r))
-	
-	// Build authorization URL
-	authURL := fmt.Sprintf("%s?client_id=%s&redirect_uri=%s&response_type=code&scope=%s&state=%s&access_type=offline&prompt=consent",
-		cfg.AuthURI,
-		cfg.ClientID,
-		redirectURI,
-		"https://www.googleapis.com/auth/gmail.modify",
-		h.oauthState,
-	)
+
+	h.mu.Lock()
+	h.oauthState = stateToken.Value()
+	h.redirectURI = redirectURI
+	h.mu.Unlock()
+
+	// Build authorization URL with proper URL encoding
+	params := url.Values{
+		"client_id":     {cfg.ClientID},
+		"redirect_uri":  {redirectURI},
+		"response_type": {"code"},
+		"scope":         {"https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/userinfo.email"},
+		"state":         {stateToken.Value()},
+		"access_type":   {"offline"},
+		"prompt":        {"consent"},
+	}
+	authURL := cfg.AuthURI + "?" + params.Encode()
 
 	h.respondJSON(w, http.StatusOK, map[string]string{
 		"auth_url": authURL,
-		"state":    h.oauthState,
+		"state":    stateToken.Value(),
 	})
 }
 
@@ -166,8 +201,7 @@ func (h *APIHandler) handleOAuthCallback(w http.ResponseWriter, r *http.Request)
 	if errParam := r.URL.Query().Get("error"); errParam != "" {
 		desc := r.URL.Query().Get("error_description")
 		h.logger.Error("oauth provider returned error", "error", errParam, "description", desc)
-		// Redirect back to setup with error
-		http.Redirect(w, r, "/setup?oauth_error="+errParam, http.StatusFound)
+		http.Redirect(w, r, "/setup?oauth_error="+url.QueryEscape(errParam), http.StatusFound)
 		return
 	}
 
@@ -178,24 +212,55 @@ func (h *APIHandler) handleOAuthCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	state := r.URL.Query().Get("state")
-	if state == "" || state != h.oauthState {
-		h.logger.Warn("oauth state mismatch", "expected", h.oauthState, "got", state)
+
+	h.mu.Lock()
+	expectedState := h.oauthState
+	cs := h.clientSecret
+	redirectURI := h.redirectURI
+	h.mu.Unlock()
+
+	if state == "" || state != expectedState {
+		h.logger.Warn("oauth state mismatch", "expected", expectedState, "got", state)
 		http.Redirect(w, r, "/setup?oauth_error=state_mismatch", http.StatusFound)
 		return
 	}
 
-	if h.clientSecret == nil {
+	if cs == nil {
 		http.Redirect(w, r, "/setup?oauth_error=no_client_secret", http.StatusFound)
 		return
 	}
 
-	// For now, just mark as authorized
-	// In a full implementation, we would:
-	// 1. Exchange code for tokens
-	// 2. Get user's email from Gmail API
-	// 3. Store the encrypted token
-	h.authorizedEmail = "user@gmail.com" // Placeholder
-	h.logger.Info("oauth callback received", "code_length", len(code))
+	cfg := cs.GetConfig()
+
+	// Build oauth2 config for token exchange
+	oauthCfg := &oauth2.Config{
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  cfg.AuthURI,
+			TokenURL: cfg.TokenURI,
+		},
+		RedirectURL: redirectURI,
+		Scopes:      []string{"https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/userinfo.email"},
+	}
+
+	// Exchange the authorization code for tokens
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	exchanger := auth.NewTokenExchanger(oauthCfg, h.store, h.encryptionKey)
+	result, err := exchanger.Exchange(ctx, code)
+	if err != nil {
+		h.logger.Error("oauth token exchange failed", "error", err)
+		http.Redirect(w, r, "/setup?oauth_error="+url.QueryEscape("token_exchange_failed: "+err.Error()), http.StatusFound)
+		return
+	}
+
+	h.mu.Lock()
+	h.authorizedEmail = result.Email
+	h.mu.Unlock()
+
+	h.logger.Info("oauth authorization complete", "email", result.Email, "account_id", result.AccountID, "new", result.IsNewToken)
 
 	// Redirect back to setup wizard
 	http.Redirect(w, r, "/setup?oauth_success=true", http.StatusFound)
@@ -203,14 +268,18 @@ func (h *APIHandler) handleOAuthCallback(w http.ResponseWriter, r *http.Request)
 
 // handleOAuthStatus returns the current OAuth status.
 func (h *APIHandler) handleOAuthStatus(w http.ResponseWriter, r *http.Request) {
-	authorized := h.authorizedEmail != ""
+	h.mu.Lock()
+	email := h.authorizedEmail
+	h.mu.Unlock()
+
+	authorized := email != ""
 	h.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"authorized": authorized,
-		"email":      h.authorizedEmail,
+		"email":      email,
 	})
 }
 
-// handleLLMTest tests the LLM connection.
+// handleLLMTest tests the LLM connection by making a real API call.
 func (h *APIHandler) handleLLMTest(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Provider string `json:"provider"`
@@ -239,14 +308,135 @@ func (h *APIHandler) handleLLMTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// For now, just validate the input
-	// TODO: Actually test the connection by making a simple API call
 	h.logger.Info("LLM test requested", "provider", req.Provider, "model", req.Model)
+
+	// Actually test the connection
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	if err := testLLMConnection(ctx, req.Provider, req.APIKey, req.Model, req.BaseURL); err != nil {
+		h.respondJSON(w, http.StatusOK, map[string]interface{}{
+			"status":  "error",
+			"message": err.Error(),
+		})
+		return
+	}
 
 	h.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"status":  "ok",
-		"message": "Configuration validated",
+		"message": "Connection successful",
 	})
+}
+
+// testLLMConnection verifies the LLM provider credentials by making a lightweight API call.
+func testLLMConnection(ctx context.Context, provider, apiKey, model, baseURL string) error {
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	switch provider {
+	case "openai":
+		endpoint := "https://api.openai.com/v1/models/" + url.PathEscape(model)
+		if baseURL != "" {
+			endpoint = strings.TrimRight(baseURL, "/") + "/v1/models/" + url.PathEscape(model)
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+		if err != nil {
+			return fmt.Errorf("failed to build request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("connection failed: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("invalid API key (HTTP 401)")
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			return fmt.Errorf("model %q not found (HTTP 404)", model)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected status: HTTP %d", resp.StatusCode)
+		}
+
+	case "anthropic":
+		endpoint := "https://api.anthropic.com/v1/messages"
+		if baseURL != "" {
+			endpoint = strings.TrimRight(baseURL, "/") + "/v1/messages"
+		}
+		// Send a minimal request to validate auth
+		body := `{"model":"` + model + `","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`
+		req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("failed to build request: %w", err)
+		}
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("connection failed: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("invalid API key (HTTP 401)")
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			return fmt.Errorf("model %q not found (HTTP 404)", model)
+		}
+		// 200 or 400 (bad request but auth passed) both mean the key works
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusBadRequest {
+			return fmt.Errorf("unexpected status: HTTP %d", resp.StatusCode)
+		}
+
+	case "gemini":
+		endpoint := fmt.Sprintf("https://generativelanguage.googleapis.com/v1/models/%s?key=%s",
+			url.PathEscape(model), url.QueryEscape(apiKey))
+		if baseURL != "" {
+			endpoint = fmt.Sprintf("%s/v1/models/%s?key=%s",
+				strings.TrimRight(baseURL, "/"), url.PathEscape(model), url.QueryEscape(apiKey))
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+		if err != nil {
+			return fmt.Errorf("failed to build request: %w", err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("connection failed: %w", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("invalid API key (HTTP %d)", resp.StatusCode)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			return fmt.Errorf("model %q not found (HTTP 404)", model)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("unexpected status: HTTP %d", resp.StatusCode)
+		}
+
+	case "ollama":
+		endpoint := "http://localhost:11434/api/tags"
+		if baseURL != "" {
+			endpoint = strings.TrimRight(baseURL, "/") + "/api/tags"
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+		if err != nil {
+			return fmt.Errorf("failed to build request: %w", err)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("cannot reach Ollama at %s: %w", endpoint, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("Ollama returned HTTP %d", resp.StatusCode)
+		}
+
+	default:
+		return fmt.Errorf("unsupported provider: %s", provider)
+	}
+
+	return nil
 }
 
 // handleComplete saves the configuration and completes setup.
@@ -282,6 +472,18 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Use current running config values as defaults for store/http
+	storePath := "/var/lib/mailtagger/state.db"
+	httpAddr := ":8080"
+	if h.runningCfg != nil {
+		if h.runningCfg.Store.Path != "" {
+			storePath = h.runningCfg.Store.Path
+		}
+		if h.runningCfg.HTTP.Addr != "" {
+			httpAddr = h.runningCfg.HTTP.Addr
+		}
+	}
+
 	// Build the config
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
@@ -292,10 +494,10 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 		PollInterval: "5m",
 		Store: config.StoreConfig{
 			Type: "sqlite",
-			Path: "/var/lib/mailtagger/state.db",
+			Path: storePath,
 		},
 		HTTP: config.HTTPConfig{
-			Addr:           ":8080",
+			Addr:           httpAddr,
 			MetricsEnabled: true,
 		},
 	}
@@ -321,10 +523,14 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 		"categories", len(req.Categories),
 	)
 
+	// Include the encryption key in the response so the user can set it
+	encKeyHex := hex.EncodeToString(h.encryptionKey)
+
 	h.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "ok",
-		"message": "Configuration generated. Save the config below and restart mailtagger with --config pointing to it.",
-		"config":  string(yamlBytes),
+		"status":         "ok",
+		"message":        "Configuration generated. Save the config below and restart mailtagger with --config pointing to it.",
+		"config":         string(yamlBytes),
+		"encryption_key": encKeyHex,
 	})
 }
 
@@ -350,20 +556,13 @@ func getBaseURL(r *http.Request) string {
 	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
 		scheme = proto
 	}
-	
+
 	host := r.Host
 	if fwdHost := r.Header.Get("X-Forwarded-Host"); fwdHost != "" {
 		host = fwdHost
 	}
-	
-	return fmt.Sprintf("%s://%s", scheme, host)
-}
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+	return fmt.Sprintf("%s://%s", scheme, host)
 }
 
 // SanitizeAPIKey masks an API key for logging (shows first/last 4 chars).
@@ -372,4 +571,9 @@ func SanitizeAPIKey(key string) string {
 		return strings.Repeat("*", len(key))
 	}
 	return key[:4] + strings.Repeat("*", len(key)-8) + key[len(key)-4:]
+}
+
+// EncryptionKeyHex returns the hex-encoded encryption key for display.
+func (h *APIHandler) EncryptionKeyHex() string {
+	return hex.EncodeToString(h.encryptionKey)
 }
