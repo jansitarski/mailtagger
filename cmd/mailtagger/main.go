@@ -167,10 +167,25 @@ func runSetupMode(ctx context.Context, cfg *config.Config, addrOverride string, 
 	// Create setup handler
 	setupHandler := setup.NewHandler(st, logger)
 
+	// Create API handler for setup endpoints
+	apiHandler := setup.NewAPIHandler(setup.APIHandlerConfig{
+		Store:      st,
+		Token:      setupToken,
+		Logger:     logger,
+		ConfigPath: "", // Will be set when we implement config saving
+	})
+
 	// Register /setup routes with token middleware
 	srv.Router().Route("/setup", func(r chi.Router) {
 		r.Use(setupToken.Middleware)
 		r.Get("/", setupHandler.ServeHTTP)
+		
+		// API routes
+		r.Route("/api", func(api chi.Router) {
+			apiHandler.Routes(api)
+		})
+		
+		// Catch-all for SPA routing
 		r.Get("/*", setupHandler.ServeHTTP)
 	})
 
