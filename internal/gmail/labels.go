@@ -46,7 +46,7 @@ func (lm *LabelManager) SyncLabels(ctx context.Context) error {
 	var resp *gmail.ListLabelsResponse
 
 	// Execute with rate limiting and retry
-	err := lm.client.rateLimiter.Do(ctx, func() error {
+	err := lm.client.rateLimiter.DoWithOp(ctx, "labels.list", func() error {
 		var apiErr error
 		resp, apiErr = lm.client.service.Users.Labels.List("me").Context(ctx).Do()
 		return apiErr
@@ -95,7 +95,7 @@ func (lm *LabelManager) CreateLabel(ctx context.Context, labelName string) (stri
 	var created *gmail.Label
 
 	// Execute with rate limiting and retry
-	err := lm.client.rateLimiter.Do(ctx, func() error {
+	err := lm.client.rateLimiter.DoWithOp(ctx, "labels.create", func() error {
 		var apiErr error
 		created, apiErr = lm.client.service.Users.Labels.Create("me", label).Context(ctx).Do()
 		return apiErr

@@ -33,7 +33,7 @@ func (c *Client) GetMessage(ctx context.Context, messageID string) (*Message, er
 	var gmailMsg *gmail.Message
 
 	// Execute with rate limiting and retry
-	err := c.rateLimiter.Do(ctx, func() error {
+	err := c.rateLimiter.DoWithOp(ctx, "messages.get", func() error {
 		var apiErr error
 		gmailMsg, apiErr = c.service.Users.Messages.Get("me", messageID).
 			Context(ctx).
@@ -109,7 +109,7 @@ func (c *Client) AddLabels(ctx context.Context, messageID string, labelIDs []str
 	}
 
 	// Execute with rate limiting and retry - return raw API error for retry detection
-	err := c.rateLimiter.Do(ctx, func() error {
+	err := c.rateLimiter.DoWithOp(ctx, "messages.modify", func() error {
 		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
 		return apiErr
 	})
@@ -135,7 +135,7 @@ func (c *Client) RemoveLabels(ctx context.Context, messageID string, labelIDs []
 	}
 
 	// Execute with rate limiting and retry - return raw API error for retry detection
-	err := c.rateLimiter.Do(ctx, func() error {
+	err := c.rateLimiter.DoWithOp(ctx, "messages.modify", func() error {
 		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
 		return apiErr
 	})
@@ -162,7 +162,7 @@ func (c *Client) ModifyLabels(ctx context.Context, messageID string, addLabelIDs
 	}
 
 	// Execute with rate limiting and retry - return raw API error for retry detection
-	err := c.rateLimiter.Do(ctx, func() error {
+	err := c.rateLimiter.DoWithOp(ctx, "messages.modify", func() error {
 		_, apiErr := c.service.Users.Messages.Modify("me", messageID, req).Context(ctx).Do()
 		return apiErr
 	})

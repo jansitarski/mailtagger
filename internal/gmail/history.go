@@ -47,7 +47,7 @@ func (c *Client) SyncHistory(ctx context.Context, startHistoryID string) (*Histo
 
 	// Execute with rate limiting - Pages handles pagination internally
 	// We need to wrap the entire pagination operation
-	err = c.rateLimiter.Do(ctx, func() error {
+	err = c.rateLimiter.DoWithOp(ctx, "history.list", func() error {
 		return req.Pages(ctx, func(resp *gmail.ListHistoryResponse) error {
 			// Extract message IDs from history records
 			for _, history := range resp.History {
@@ -92,7 +92,7 @@ func (c *Client) GetCurrentHistoryID(ctx context.Context) (string, error) {
 	var profile *gmail.Profile
 
 	// Execute with rate limiting and retry
-	err := c.rateLimiter.Do(ctx, func() error {
+	err := c.rateLimiter.DoWithOp(ctx, "profile.get", func() error {
 		var apiErr error
 		profile, apiErr = c.service.Users.GetProfile("me").Context(ctx).Do()
 		return apiErr
@@ -123,7 +123,7 @@ func (c *Client) Bootstrap(ctx context.Context) (*HistoryResult, error) {
 	req := c.service.Users.Messages.List("me").Context(ctx)
 
 	// Execute with rate limiting - wrap the entire pagination operation
-	err := c.rateLimiter.Do(ctx, func() error {
+	err := c.rateLimiter.DoWithOp(ctx, "messages.list", func() error {
 		return req.Pages(ctx, func(resp *gmail.ListMessagesResponse) error {
 			for _, msg := range resp.Messages {
 				if msg.Id != "" {
