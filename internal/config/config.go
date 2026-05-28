@@ -7,6 +7,7 @@ type Config struct {
 	LLM                LLMConfig    `yaml:"llm"`
 	Store              StoreConfig  `yaml:"store"`
 	HTTP               HTTPConfig   `yaml:"http"`
+	Log                LogConfig    `yaml:"log"`
 	Categories         []Category   `yaml:"categories"`
 	PollInterval       string       `yaml:"poll_interval"`         // e.g., "5m", parsed as time.Duration
 	MaxMessagesPerTick *int         `yaml:"max_messages_per_tick"` // max messages to process per tick (nil = use default, 0 = unlimited)
@@ -36,6 +37,12 @@ type HTTPConfig struct {
 	ReadTimeout    string `yaml:"read_timeout"`    // e.g., "10s", parsed as time.Duration
 	WriteTimeout   string `yaml:"write_timeout"`   // e.g., "10s", parsed as time.Duration
 	MetricsEnabled bool   `yaml:"metrics_enabled"` // enable /metrics endpoint
+}
+
+// LogConfig defines logging settings.
+type LogConfig struct {
+	Level  string `yaml:"level"`  // "debug", "info", "warn", "error" (default: "info")
+	Format string `yaml:"format"` // "json" or "text" (default: "json")
 }
 
 // Category defines a classification category and its Gmail label.

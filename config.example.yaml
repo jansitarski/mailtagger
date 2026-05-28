@@ -57,6 +57,20 @@ http:
   
   # Write timeout for outgoing responses
   write_timeout: 10s
+  
+  # Enable Prometheus metrics endpoint at /metrics
+  metrics_enabled: true
+
+# Logging configuration
+log:
+  # Log level: "debug", "info", "warn", "error"
+  # Default: "info"
+  level: info
+  
+  # Log format: "json" or "text"
+  # Default: "json" (recommended for production)
+  # Use "text" for local development for human-readable output
+  format: json
 
 # Classification categories
 # Each category maps to a Gmail label that will be applied to matching messages

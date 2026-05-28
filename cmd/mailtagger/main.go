@@ -21,6 +21,7 @@ import (
 	"github.com/jansitarski/mailtagger/internal/config"
 	internalGmail "github.com/jansitarski/mailtagger/internal/gmail"
 	mthttp "github.com/jansitarski/mailtagger/internal/http"
+	"github.com/jansitarski/mailtagger/internal/logging"
 	"github.com/jansitarski/mailtagger/internal/pipeline"
 	"github.com/jansitarski/mailtagger/internal/store"
 )
@@ -78,16 +79,16 @@ func newServeCmd() *cobra.Command {
 }
 
 func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, encryptionKeyHex string) error {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
-
-	slog.Info("starting mailtagger", "version", version, "config", configPath)
-
-	// Load configuration
+	// Load configuration first to get log settings
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+
+	// Setup logging based on config
+	logger := logging.Setup(cfg.Log)
+
+	slog.Info("starting mailtagger", "version", version, "config", configPath)
 
 	// Get encryption key
 	encryptionKey, err := getEncryptionKey(encryptionKeyHex)
