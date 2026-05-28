@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/jansitarski/mailtagger/internal/metrics"
 	"golang.org/x/time/rate"
 	"google.golang.org/api/googleapi"
 )
@@ -73,6 +74,12 @@ func (rl *RateLimiter) Wait(ctx context.Context) error {
 // Do executes a function with rate limiting and automatic retry on 429/5xx errors.
 // The function f should return the result and error from the Gmail API call.
 func (rl *RateLimiter) Do(ctx context.Context, f func() error) error {
+	return rl.DoWithOp(ctx, "unknown", f)
+}
+
+// DoWithOp executes a function with rate limiting, automatic retry, and metrics tracking.
+// The op parameter identifies the operation for metrics labeling.
+func (rl *RateLimiter) DoWithOp(ctx context.Context, op string, f func() error) error {
 	var lastErr error
 
 	for attempt := 0; attempt <= rl.maxRetries; attempt++ {
@@ -81,6 +88,9 @@ func (rl *RateLimiter) Do(ctx context.Context, f func() error) error {
 			return fmt.Errorf("rate limiter wait failed: %w", err)
 		}
 
+		// Track request
+		metrics.GmailAPIRequestsTotal.WithLabelValues(op).Inc()
+
 		// Execute the function
 		err := f()
 		if err == nil {
@@ -88,6 +98,10 @@ func (rl *RateLimiter) Do(ctx context.Context, f func() error) error {
 		}
 
 		lastErr = err
+
+		// Record error metric
+		code := extractErrorCode(err)
+		metrics.GmailAPIErrorsTotal.WithLabelValues(op, code).Inc()
 
 		// Check if this is a retryable error
 		if !rl.isRetryable(err) {
@@ -112,6 +126,28 @@ func (rl *RateLimiter) Do(ctx context.Context, f func() error) error {
 	}
 
 	return fmt.Errorf("max retries (%d) exceeded: %w", rl.maxRetries, lastErr)
+}
+
+// extractErrorCode extracts the HTTP status code from an error for metrics.
+func extractErrorCode(err error) string {
+	if err == nil {
+		return "0"
+	}
+
+	var apiErr *googleapi.Error
+	if errors.As(err, &apiErr) {
+		return strconv.Itoa(apiErr.Code)
+	}
+
+	// Check for context errors
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+
+	return "unknown"
 }
 
 // isRetryable determines if an error should trigger a retry.
