@@ -1,0 +1,53 @@
+
+mailtagger has been deployed!
+
+{{- if not .Values.secret.clientSecretJson }}
+
+⚠️  WARNING: No client_secret.json was provided!
+   You need to update the secret with your Google OAuth credentials.
+
+   1. Get your client_secret.json from Google Cloud Console
+   2. Base64 encode it:
+      Linux:  base64 -w 0 < client_secret.json
+      macOS:  base64 -i client_secret.json
+   3. Update the secret:
+      kubectl patch secret {{ include "mailtagger.secretName" . }} \
+        -n {{ .Release.Namespace }} \
+        -p '{"data":{"client-secret-json":"YOUR_BASE64_ENCODED_JSON"}}'
+
+{{- end }}
+
+{{- if not .Values.secret.encryptionKey }}
+
+ℹ️  A random encryption key was generated. To view it:
+   kubectl get secret {{ include "mailtagger.secretName" . }} -n {{ .Release.Namespace }} \
+     -o jsonpath='{.data.encryption-key}' | base64 -d
+
+{{- end }}
+
+To access the mailtagger UI:
+
+1. Port-forward to the service:
+   kubectl port-forward svc/{{ include "mailtagger.fullname" . }} -n {{ .Release.Namespace }} 8080:{{ .Values.service.port }}
+
+2. Get the setup token from the logs:
+   kubectl logs -n {{ .Release.Namespace }} deploy/{{ include "mailtagger.fullname" . }} | grep "Setup Token"
+
+3. Open in your browser:
+   http://localhost:8080/setup?token=YOUR_TOKEN
+
+{{- if .Values.config.http.metricsEnabled }}
+
+Prometheus metrics are available at:
+   http://localhost:8080/metrics
+
+{{- if .Values.serviceMonitor.enabled }}
+A ServiceMonitor has been created for Prometheus Operator.
+{{- end }}
+{{- end }}
+
+Health check endpoint:
+   http://localhost:8080/healthz
+
+For more information, visit:
+   https://github.com/jansitarski/mailtagger
