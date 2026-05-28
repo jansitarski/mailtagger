@@ -1,0 +1,20 @@
+apiVersion: v2
+name: mailtagger
+description: AI-powered Gmail labeling - automatically classify and label emails using LLMs
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/jansitarski/mailtagger
+sources:
+  - https://github.com/jansitarski/mailtagger
+maintainers:
+  - name: Jan Sitarski
+    url: https://github.com/jansitarski
+keywords:
+  - gmail
+  - email
+  - labeling
+  - ai
+  - llm
+  - classification
+  - automation
