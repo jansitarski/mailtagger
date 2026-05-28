@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/gmail/v1"
@@ -138,11 +139,24 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 func runSetupMode(ctx context.Context, cfg *config.Config, addrOverride string, st *store.Store, logger *slog.Logger) error {
 	slog.Info("starting in setup mode (no accounts found)")
 
+	// Generate setup token
+	setupToken, err := setup.GenerateToken(logger)
+	if err != nil {
+		return fmt.Errorf("failed to generate setup token: %w", err)
+	}
+
 	// Override addr from flag if set
 	httpCfg := cfg.HTTP
 	if addrOverride != "" {
 		httpCfg.Addr = addrOverride
 	}
+
+	// Log the setup token with access instructions
+	addr := httpCfg.Addr
+	if addr == "" {
+		addr = ":8080"
+	}
+	setupToken.LogToken(addr)
 
 	// Create HTTP server
 	srv, err := mthttp.New(httpCfg, logger)
@@ -153,9 +167,12 @@ func runSetupMode(ctx context.Context, cfg *config.Config, addrOverride string, 
 	// Create setup handler
 	setupHandler := setup.NewHandler(st, logger)
 
-	// Register /setup routes
-	srv.Router().Get("/setup", setupHandler.ServeHTTP)
-	srv.Router().Get("/setup/*", setupHandler.ServeHTTP)
+	// Register /setup routes with token middleware
+	srv.Router().Route("/setup", func(r chi.Router) {
+		r.Use(setupToken.Middleware)
+		r.Get("/", setupHandler.ServeHTTP)
+		r.Get("/*", setupHandler.ServeHTTP)
+	})
 
 	// Register /healthz (returns healthy but indicates setup mode)
 	srv.Router().Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
