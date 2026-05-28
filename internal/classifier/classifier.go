@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/jansitarski/mailtagger/internal/metrics"
 	"github.com/tmc/langchaingo/llms"
 )
 
@@ -45,6 +48,8 @@ type Classifier struct {
 	model            llms.Model // LLM model for classification
 	categories       []Category // available classification categories
 	systemPromptTmpl string     // custom system prompt template (optional)
+	provider         string     // LLM provider name for metrics
+	modelName        string     // LLM model name for metrics
 }
 
 // New creates a new Classifier with the given model and categories.
@@ -65,7 +70,16 @@ func New(model llms.Model, categories []Category) (*Classifier, error) {
 	return &Classifier{
 		model:      model,
 		categories: categories,
+		provider:   "unknown",
+		modelName:  "unknown",
 	}, nil
+}
+
+// WithProvider sets the provider and model name for metrics tracking.
+func (c *Classifier) WithProvider(provider, model string) *Classifier {
+	c.provider = provider
+	c.modelName = model
+	return c
 }
 
 // WithSystemPrompt sets a custom system prompt template for the Classifier.
@@ -101,18 +115,30 @@ func (c *Classifier) Classify(ctx context.Context, email Email) (*Decision, erro
 		llms.TextParts(llms.ChatMessageTypeHuman, userPrompt),
 	}
 
+	// Track latency for metrics
+	start := time.Now()
 	response, err := c.model.GenerateContent(ctx, messages, llms.WithJSONMode())
+	duration := time.Since(start).Seconds()
+
+	// Record latency (always, even on error)
+	metrics.LLMRequestDurationSeconds.WithLabelValues(c.provider, c.modelName).Observe(duration)
+
 	if err != nil {
+		// Record error metric with reason classification
+		reason := classifyLLMError(err)
+		metrics.LLMErrorsTotal.WithLabelValues(c.provider, reason).Inc()
 		return nil, fmt.Errorf("LLM call: %w", err)
 	}
 
 	if len(response.Choices) == 0 {
+		metrics.LLMErrorsTotal.WithLabelValues(c.provider, "empty_response").Inc()
 		return nil, fmt.Errorf("no response from LLM")
 	}
 
 	// Parse the JSON response
 	var decision Decision
 	if err := json.Unmarshal([]byte(response.Choices[0].Content), &decision); err != nil {
+		metrics.LLMErrorsTotal.WithLabelValues(c.provider, "json_parse_error").Inc()
 		return nil, fmt.Errorf("parse LLM response: %w", err)
 	}
 
@@ -120,6 +146,42 @@ func (c *Classifier) Classify(ctx context.Context, email Email) (*Decision, erro
 	decision.Category = c.validateCategory(decision.Category)
 
 	return &decision, nil
+}
+
+// classifyLLMError categorizes LLM errors for metrics labeling.
+func classifyLLMError(err error) string {
+	errStr := err.Error()
+
+	// Check for common error patterns
+	switch {
+	case containsAny(errStr, "rate limit", "rate_limit", "429", "too many requests"):
+		return "rate_limit"
+	case containsAny(errStr, "timeout", "deadline exceeded", "context deadline"):
+		return "timeout"
+	case containsAny(errStr, "context canceled", "context cancelled"):
+		return "canceled"
+	case containsAny(errStr, "unauthorized", "401", "invalid api key", "authentication"):
+		return "auth_error"
+	case containsAny(errStr, "bad request", "400", "invalid"):
+		return "bad_request"
+	case containsAny(errStr, "500", "502", "503", "504", "server error", "internal error"):
+		return "server_error"
+	case containsAny(errStr, "connection", "network", "dial", "EOF"):
+		return "network_error"
+	default:
+		return "unknown"
+	}
+}
+
+// containsAny returns true if s contains any of the substrings (case-insensitive).
+func containsAny(s string, substrs ...string) bool {
+	lower := strings.ToLower(s)
+	for _, sub := range substrs {
+		if strings.Contains(lower, strings.ToLower(sub)) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateCategory checks if the category is valid and returns the fallback if not.

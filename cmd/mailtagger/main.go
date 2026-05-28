@@ -137,6 +137,7 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 	if err != nil {
 		return fmt.Errorf("failed to create classifier: %w", err)
 	}
+	cls.WithProvider(cfg.LLM.Provider, cfg.LLM.Model)
 
 	// Create Gmail client factory
 	gmailFactory := &gmailClientFactory{
