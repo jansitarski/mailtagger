@@ -77,17 +77,17 @@ func (t *Token) Middleware(next http.Handler) http.Handler {
 		// Check query parameter
 		queryToken := r.URL.Query().Get("token")
 		if queryToken != "" && t.Validate(queryToken) {
-			// Set cookie and redirect to remove token from URL
-			http.SetCookie(w, &http.Cookie{
-				Name:     TokenCookieName,
-				Value:    t.value,
-				Path:     "/setup",
-				HttpOnly: true,
-				SameSite: http.SameSiteStrictMode,
-				// Secure should be true in production with HTTPS
-				// We'll set it based on the request scheme
-				Secure: r.TLS != nil,
-			})
+		// Set cookie and redirect to remove token from URL
+		http.SetCookie(w, &http.Cookie{
+			Name:     TokenCookieName,
+			Value:    t.value,
+			Path:     "/setup",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode, // Lax allows cookie on OAuth redirects
+			// Secure should be true in production with HTTPS
+			// We'll set it based on the request scheme
+			Secure: r.TLS != nil,
+		})
 
 			// Redirect to same path without query token
 			q := r.URL.Query()

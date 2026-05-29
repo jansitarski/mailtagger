@@ -418,12 +418,13 @@
         // Helper to render categories
         function renderCategories() {
             if (state.data.categories.length === 0) {
-                // Default categories
+                // Default categories (Others is required as fallback)
                 state.data.categories = [
                     { name: 'newsletter', label: 'automated/newsletter', description: 'Marketing emails, promotional content, newsletters' },
                     { name: 'receipt', label: 'automated/receipt', description: 'Purchase confirmations, order receipts, invoices' },
                     { name: 'notification', label: 'automated/notification', description: 'Service notifications, alerts, automated messages' },
-                    { name: 'personal', label: 'automated/personal', description: 'Personal correspondence from individuals' }
+                    { name: 'personal', label: 'automated/personal', description: 'Personal correspondence from individuals' },
+                    { name: 'Others', label: 'automated/others', description: 'Emails that do not fit into other categories (required fallback)' }
                 ];
             }
             
@@ -610,6 +611,9 @@
             const params = new URLSearchParams(window.location.search);
             if (params.get('oauth_success') === 'true') {
                 state.data.gmailAuthorized = true;
+                // Mark steps 0-3 as completed and move to step 4 (LLM config)
+                state.completedSteps = [0, 1, 2, 3];
+                state.currentStep = 4;
                 // Clean URL
                 window.history.replaceState({}, '', '/setup');
             }

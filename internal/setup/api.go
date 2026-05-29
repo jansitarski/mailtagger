@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -27,13 +29,15 @@ type APIHandler struct {
 	logger        *slog.Logger
 	encryptionKey []byte
 	runningCfg    *config.Config
+	configPath    string // path to the config file being used
 
 	// mu protects mutable state below
-	mu              sync.Mutex
-	clientSecret    *ClientSecretData
-	oauthState      string
-	redirectURI     string
-	authorizedEmail string
+	mu                  sync.Mutex
+	clientSecret        *ClientSecretData
+	clientSecretRaw     []byte // raw JSON bytes for saving to file
+	oauthState          string
+	redirectURI         string
+	authorizedEmail     string
 }
 
 // SetupStore defines the store interface needed during setup.
@@ -72,6 +76,7 @@ type APIHandlerConfig struct {
 	Logger        *slog.Logger
 	EncryptionKey []byte
 	RunningCfg    *config.Config
+	ConfigPath    string // path to the config file being used
 }
 
 // NewAPIHandler creates a new API handler.
@@ -85,6 +90,7 @@ func NewAPIHandler(cfg APIHandlerConfig) *APIHandler {
 		logger:        cfg.Logger,
 		encryptionKey: cfg.EncryptionKey,
 		runningCfg:    cfg.RunningCfg,
+		configPath:    cfg.ConfigPath,
 	}
 }
 
@@ -129,6 +135,7 @@ func (h *APIHandler) handleClientSecret(w http.ResponseWriter, r *http.Request) 
 	// Store the client secret in memory for the OAuth flow
 	h.mu.Lock()
 	h.clientSecret = &data
+	h.clientSecretRaw = body // Store raw bytes for saving to file later
 	h.mu.Unlock()
 
 	truncatedID := cfg.ClientID
@@ -475,6 +482,7 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 	// Use current running config values as defaults for store/http
 	storePath := "/var/lib/mailtagger/state.db"
 	httpAddr := ":8080"
+	configDir := "."
 	if h.runningCfg != nil {
 		if h.runningCfg.Store.Path != "" {
 			storePath = h.runningCfg.Store.Path
@@ -483,15 +491,38 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 			httpAddr = h.runningCfg.HTTP.Addr
 		}
 	}
+	if h.configPath != "" {
+		configDir = filepath.Dir(h.configPath)
+	}
 
-	// Build the config
+	// Save client_secret.json to the same directory as the config
+	h.mu.Lock()
+	clientSecretRaw := h.clientSecretRaw
+	h.mu.Unlock()
+
+	clientSecretPath := filepath.Join(configDir, "client_secret.json")
+	if len(clientSecretRaw) > 0 {
+		if err := os.WriteFile(clientSecretPath, clientSecretRaw, 0600); err != nil {
+			h.logger.Error("failed to save client_secret.json", "error", err, "path", clientSecretPath)
+			h.respondError(w, http.StatusInternalServerError, "failed to save client_secret.json: "+err.Error())
+			return
+		}
+		h.logger.Info("saved client_secret.json", "path", clientSecretPath)
+	}
+
+	// Get encryption key hex
+	encKeyHex := hex.EncodeToString(h.encryptionKey)
+
+	// Build the config with all paths
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
 			Provider: req.LLMProvider,
 			Model:    req.LLMModel,
 			APIKey:   req.LLMAPIKey,
 		},
-		PollInterval: "5m",
+		PollInterval:     "5m",
+		ClientSecretPath: clientSecretPath,
+		EncryptionKey:    encKeyHex,
 		Store: config.StoreConfig{
 			Type: "sqlite",
 			Path: storePath,
@@ -517,20 +548,33 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logger.Info("setup complete requested",
+	// Save the config file
+	configPath := h.configPath
+	if configPath == "" {
+		configPath = filepath.Join(configDir, "config.yaml")
+	}
+	if err := os.WriteFile(configPath, yamlBytes, 0644); err != nil {
+		h.logger.Error("failed to save config.yaml", "error", err, "path", configPath)
+		h.respondError(w, http.StatusInternalServerError, "failed to save config.yaml: "+err.Error())
+		return
+	}
+	h.logger.Info("saved config.yaml", "path", configPath, "encryption_key", encKeyHex)
+
+	h.logger.Info("setup complete",
 		"provider", req.LLMProvider,
 		"model", req.LLMModel,
 		"categories", len(req.Categories),
+		"config_path", configPath,
+		"client_secret_path", clientSecretPath,
 	)
 
-	// Include the encryption key in the response so the user can set it
-	encKeyHex := hex.EncodeToString(h.encryptionKey)
-
 	h.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"status":         "ok",
-		"message":        "Configuration generated. Save the config below and restart mailtagger with --config pointing to it.",
-		"config":         string(yamlBytes),
-		"encryption_key": encKeyHex,
+		"status":             "ok",
+		"message":            "Setup complete! Configuration saved. Restart mailtagger to begin processing emails.",
+		"config":             string(yamlBytes),
+		"config_path":        configPath,
+		"client_secret_path": clientSecretPath,
+		"encryption_key":     encKeyHex,
 	})
 }
 

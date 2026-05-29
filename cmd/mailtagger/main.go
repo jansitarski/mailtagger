@@ -93,11 +93,14 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 
 	// Get encryption key (optional in setup mode)
 	var encryptionKey []byte
-	if encryptionKeyHex != "" || os.Getenv("MAILTAGGER_ENCRYPTION_KEY") != "" {
+	envKey := os.Getenv("MAILTAGGER_ENCRYPTION_KEY")
+	slog.Debug("checking encryption key sources", "flag_set", encryptionKeyHex != "", "env_set", envKey != "")
+	if encryptionKeyHex != "" || envKey != "" {
 		encryptionKey, err = getEncryptionKey(encryptionKeyHex)
 		if err != nil {
 			return err
 		}
+		slog.Info("using encryption key from flag/env", "key_hex", hex.EncodeToString(encryptionKey))
 	}
 
 	// Open the store
@@ -119,33 +122,60 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 	}
 
 	if !hasAccounts {
-		return runSetupMode(ctx, cfg, addrOverride, st, logger)
+		return runSetupMode(ctx, cfg, configPath, addrOverride, st, logger)
 	}
 
-	// Encryption key is required in normal mode
+	// Normal mode - need encryption key and client secret
+
+	// Encryption key: check flag, env, then config
 	if encryptionKey == nil {
-		return fmt.Errorf("encryption key required: use --encryption-key flag or MAILTAGGER_ENCRYPTION_KEY env var")
+		if cfg.EncryptionKey != "" {
+			encryptionKey, err = getEncryptionKey(cfg.EncryptionKey)
+			if err != nil {
+				return fmt.Errorf("invalid encryption_key in config: %w", err)
+			}
+			slog.Info("using encryption key from config", "key_hex", cfg.EncryptionKey)
+		} else {
+			return fmt.Errorf("encryption key required: use --encryption-key flag, MAILTAGGER_ENCRYPTION_KEY env var, or encryption_key in config")
+		}
 	}
 
-	// Client secret is required in normal mode
+	// Client secret: check flag, then config
 	if clientSecretPath == "" {
-		return fmt.Errorf("client secret required: use --client-secret flag")
+		if cfg.ClientSecretPath != "" {
+			clientSecretPath = cfg.ClientSecretPath
+		} else {
+			return fmt.Errorf("client secret required: use --client-secret flag or client_secret_path in config")
+		}
 	}
 
 	return runNormalMode(ctx, cfg, addrOverride, clientSecretPath, encryptionKey, st, logger)
 }
 
 // runSetupMode runs the server in setup wizard mode (no pipeline, serves /setup).
-func runSetupMode(ctx context.Context, cfg *config.Config, addrOverride string, st *store.Store, logger *slog.Logger) error {
+func runSetupMode(ctx context.Context, cfg *config.Config, configPath, addrOverride string, st *store.Store, logger *slog.Logger) error {
 	slog.Info("starting in setup mode (no accounts found)")
 
-	// Generate encryption key for this setup session
-	encKeyBytes := make([]byte, 32)
-	if _, err := rand.Read(encKeyBytes); err != nil {
-		return fmt.Errorf("failed to generate encryption key: %w", err)
+	// Use existing encryption key from config, or generate a new one
+	var encKeyBytes []byte
+	if cfg.EncryptionKey != "" {
+		var err error
+		encKeyBytes, err = hex.DecodeString(cfg.EncryptionKey)
+		if err != nil || len(encKeyBytes) != 32 {
+			slog.Warn("invalid encryption key in config, generating new one", "error", err)
+			encKeyBytes = nil
+		} else {
+			slog.Info("using encryption key from config", "key_hex", cfg.EncryptionKey)
+		}
 	}
-	slog.Info("generated encryption key for setup session",
-		"key_hex", hex.EncodeToString(encKeyBytes))
+	if encKeyBytes == nil {
+		encKeyBytes = make([]byte, 32)
+		if _, err := rand.Read(encKeyBytes); err != nil {
+			return fmt.Errorf("failed to generate encryption key: %w", err)
+		}
+		slog.Info("generated encryption key for setup session",
+			"key_hex", hex.EncodeToString(encKeyBytes))
+	}
 
 	// Generate setup token
 	setupToken, err := setup.GenerateToken(logger)
@@ -182,6 +212,7 @@ func runSetupMode(ctx context.Context, cfg *config.Config, addrOverride string, 
 		Logger:        logger,
 		EncryptionKey: encKeyBytes,
 		RunningCfg:    cfg,
+		ConfigPath:    configPath,
 	})
 
 	// Register /setup routes with token middleware
