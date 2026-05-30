@@ -111,6 +111,30 @@
             }
         };
 
+        // Persist state to sessionStorage
+        function saveState() {
+            try {
+                sessionStorage.setItem('mailtagger_wizard_state', JSON.stringify(state));
+            } catch (e) {
+                // Ignore storage errors
+            }
+        }
+
+        // Restore state from sessionStorage
+        function restoreState() {
+            try {
+                const saved = sessionStorage.getItem('mailtagger_wizard_state');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    state.currentStep = parsed.currentStep || 0;
+                    state.completedSteps = parsed.completedSteps || [];
+                    Object.assign(state.data, parsed.data || {});
+                }
+            } catch (e) {
+                // Ignore parse errors
+            }
+        }
+
         // Wizard steps configuration
         const steps = [
             { id: 'welcome', title: 'Welcome', shortTitle: '1' },
@@ -178,7 +202,7 @@
 
             // Update navigation buttons
             elements.btnBack.disabled = state.currentStep === 0;
-            elements.btnNext.textContent = state.currentStep === steps.length - 1 ? 'Save & Start' : 'Next →';
+            elements.btnNext.textContent = state.currentStep === steps.length - 1 ? 'Save Configuration' : 'Next →';
             
             hideError();
         }
@@ -256,7 +280,8 @@
                                 Create Credentials →
                             </a>
                             <p class="text-gray-500 text-xs mt-2">
-                                Add this redirect URI: <code class="bg-gray-100 px-1 rounded">${window.location.origin}/setup/api/oauth/callback</code>
+                                Add this redirect URI: <code id="redirect-uri" class="bg-gray-100 px-1 rounded">${window.location.origin}/setup/api/oauth/callback</code>
+                                <button id="btn-copy-redirect" class="ml-2 px-2 py-0.5 text-xs bg-gray-200 text-gray-700 rounded hover:bg-gray-300">Copy</button>
                             </p>
                         </div>
                     </div>
@@ -344,9 +369,12 @@
                         
                         <div>
                             <label class="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                            <select id="llm-model-select" class="w-full border rounded-lg px-3 py-2 mb-2">
+                                <option value="">Select a model or enter custom...</option>
+                            </select>
                             <input type="text" id="llm-model" 
                                    class="w-full border rounded-lg px-3 py-2"
-                                   placeholder="e.g., gpt-4-turbo, claude-3-sonnet"
+                                   placeholder="Or type a custom model name"
                                    value="${state.data.llmModel}">
                             <p id="model-hint" class="text-gray-500 text-sm mt-1"></p>
                         </div>
@@ -380,7 +408,7 @@
                 <div>
                     <h2 class="text-2xl font-bold text-gray-900 mb-4">Review Configuration</h2>
                     <p class="text-gray-600 mb-6">
-                        Review your settings before saving and starting mailtagger.
+                        Review your settings before saving. You will need to restart mailtagger after saving for changes to take effect.
                     </p>
                     
                     <div class="space-y-4">
@@ -408,7 +436,7 @@
                     
                     <div class="mt-6 bg-yellow-50 rounded-lg p-4">
                         <p class="text-yellow-800">
-                            <strong>Note:</strong> After saving, mailtagger will start processing your emails immediately.
+                            <strong>Note:</strong> After saving, you must restart mailtagger for the new configuration to take effect.
                         </p>
                     </div>
                 </div>
@@ -428,13 +456,19 @@
                 ];
             }
             
-            return state.data.categories.map((cat, index) => `
-                <div class="border rounded-lg p-3">
+            return state.data.categories.map((cat, index) => {
+                const isOthers = cat.name.toLowerCase() === 'others';
+                return `
+                <div class="border rounded-lg p-3 ${isOthers ? 'border-gray-400 bg-gray-50' : ''}">
                     <div class="flex justify-between items-start mb-2">
                         <input type="text" value="${cat.name}" 
-                               class="font-semibold border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:outline-none"
-                               data-index="${index}" data-field="name">
-                        <button class="text-red-500 hover:text-red-700 text-sm" data-delete="${index}">✕</button>
+                               class="font-semibold border-b border-transparent hover:border-gray-300 focus:border-blue-500 focus:outline-none ${isOthers ? 'bg-gray-50' : ''}"
+                               data-index="${index}" data-field="name"
+                               ${isOthers ? 'readonly' : ''}>
+                        ${isOthers 
+                            ? '<span class="text-xs text-gray-500 bg-gray-200 px-2 py-0.5 rounded">Required fallback</span>'
+                            : `<button class="text-red-500 hover:text-red-700 text-sm" data-delete="${index}">✕</button>`
+                        }
                     </div>
                     <div class="text-sm text-gray-600 mb-1">
                         Label: <input type="text" value="${cat.label}" 
@@ -444,12 +478,25 @@
                     <textarea class="w-full text-sm text-gray-500 border rounded p-1 mt-1" rows="2"
                               data-index="${index}" data-field="description"
                               placeholder="Description for the classifier...">${cat.description}</textarea>
+                    ${isOthers ? '<p class="text-xs text-gray-400 mt-1">This category catches emails that don\'t match other categories and cannot be removed.</p>' : ''}
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         // Page-specific setup handlers
         const pageSetupHandlers = {
+            'google-setup': () => {
+                const btn = document.getElementById('btn-copy-redirect');
+                if (btn) {
+                    btn.addEventListener('click', () => {
+                        const uri = document.getElementById('redirect-uri').textContent;
+                        navigator.clipboard.writeText(uri);
+                        btn.textContent = 'Copied!';
+                        setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+                    });
+                }
+            },
+
             'client-secret': () => {
                 const dropZone = document.getElementById('drop-zone');
                 const fileInput = document.getElementById('file-input');
@@ -483,33 +530,65 @@
                 const providerSelect = document.getElementById('llm-provider');
                 const apiKeyField = document.getElementById('api-key-field');
                 const modelHint = document.getElementById('model-hint');
+                const modelSelect = document.getElementById('llm-model-select');
+                const modelInput = document.getElementById('llm-model');
                 
                 const modelHints = {
-                    'openai': 'Recommended: gpt-4-turbo, gpt-4o-mini',
+                    'openai': 'Recommended: gpt-4o-mini for cost-effective classification',
                     'anthropic': 'Recommended: claude-3-5-sonnet-20241022',
-                    'gemini': 'Recommended: gemini-1.5-pro',
+                    'gemini': 'Recommended: gemini-2.0-flash',
                     'ollama': 'Use model name from ollama list'
                 };
+                
+                const modelOptions = {
+                    'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+                    'anthropic': ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'],
+                    'gemini': ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+                    'ollama': ['llama3', 'mistral', 'mixtral', 'phi3']
+                };
+                
+                function updateModelDropdown(provider) {
+                    const options = modelOptions[provider] || [];
+                    modelSelect.innerHTML = '<option value="">Select a model or enter custom...</option>';
+                    options.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m;
+                        opt.textContent = m;
+                        if (m === state.data.llmModel) opt.selected = true;
+                        modelSelect.appendChild(opt);
+                    });
+                }
+                
+                modelSelect.addEventListener('change', (e) => {
+                    if (e.target.value) {
+                        modelInput.value = e.target.value;
+                        state.data.llmModel = e.target.value;
+                    }
+                });
                 
                 providerSelect.addEventListener('change', (e) => {
                     state.data.llmProvider = e.target.value;
                     apiKeyField.classList.toggle('hidden', e.target.value === 'ollama');
                     modelHint.textContent = modelHints[e.target.value] || '';
+                    updateModelDropdown(e.target.value);
                 });
                 
                 document.getElementById('llm-api-key').addEventListener('input', (e) => {
                     state.data.llmApiKey = e.target.value;
                 });
                 
-                document.getElementById('llm-model').addEventListener('input', (e) => {
+                modelInput.addEventListener('input', (e) => {
                     state.data.llmModel = e.target.value;
+                    // Reset dropdown if user types custom value
+                    modelSelect.value = '';
                 });
                 
                 document.getElementById('btn-test-llm').addEventListener('click', testLLMConnection);
                 
-                // Trigger initial hint
+                // Initialize hints and dropdown for current provider
                 if (state.data.llmProvider) {
                     modelHint.textContent = modelHints[state.data.llmProvider] || '';
+                    updateModelDropdown(state.data.llmProvider);
                 }
             },
 
@@ -529,7 +608,11 @@
                 list.addEventListener('click', (e) => {
                     const deleteIndex = e.target.dataset.delete;
                     if (deleteIndex !== undefined) {
-                        state.data.categories.splice(parseInt(deleteIndex), 1);
+                        const idx = parseInt(deleteIndex);
+                        if (state.data.categories[idx].name.toLowerCase() === 'others') {
+                            return; // Cannot delete the "Others" fallback category
+                        }
+                        state.data.categories.splice(idx, 1);
                         list.innerHTML = renderCategories();
                     }
                 });
@@ -573,6 +656,7 @@
                         
                         const clientInfo = data.installed || data.web;
                         state.data.clientSecret = data;
+                        saveState();
                         
                         document.getElementById('file-info').classList.remove('hidden');
                         document.getElementById('client-id-display').textContent = 
@@ -614,6 +698,7 @@
                 // Mark steps 0-3 as completed and move to step 4 (LLM config)
                 state.completedSteps = [0, 1, 2, 3];
                 state.currentStep = 4;
+                saveState();
                 // Clean URL
                 window.history.replaceState({}, '', '/setup');
             }
@@ -659,6 +744,7 @@
             elements.btnBack.addEventListener('click', () => {
                 if (state.currentStep > 0) {
                     state.currentStep--;
+                    saveState();
                     renderProgressSteps();
                     renderCurrentPage();
                 }
@@ -676,6 +762,7 @@
 
                 if (state.currentStep < steps.length - 1) {
                     state.currentStep++;
+                    saveState();
                     renderProgressSteps();
                     renderCurrentPage();
                 } else {
@@ -724,6 +811,10 @@
                         showError('Please add at least one category');
                         return false;
                     }
+                    if (!state.data.categories.some(c => c.name.toLowerCase() === 'others')) {
+                        showError('The "Others" fallback category is required');
+                        return false;
+                    }
                     break;
             }
             
@@ -756,9 +847,20 @@
                         <h2 class="text-2xl font-bold text-gray-900 mb-4">Setup Complete!</h2>
                         <p class="text-gray-600 mb-6">${result.message}</p>
                         
+                        <div class="text-left bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+                            <h3 class="font-semibold text-green-900 mb-2">Files saved successfully:</h3>
+                            <ul class="text-green-800 space-y-1 text-sm">
+                                <li>Config: <code class="bg-green-100 px-1 rounded">${escapeHtml(result.config_path)}</code></li>
+                                <li>Client secret: <code class="bg-green-100 px-1 rounded">${escapeHtml(result.client_secret_path)}</code></li>
+                            </ul>
+                            <p class="text-green-700 text-xs mt-2">
+                                The encryption key is stored in your config file. Back up these files in a secure location.
+                            </p>
+                        </div>
+                        
                         <div class="text-left bg-gray-100 rounded-lg p-4 mb-6">
                             <div class="flex justify-between items-center mb-2">
-                                <h3 class="font-semibold text-gray-900">Generated config.yaml</h3>
+                                <h3 class="font-semibold text-gray-900">Config contents</h3>
                                 <button id="btn-copy-config" class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
                                     Copy
                                 </button>
@@ -769,8 +871,7 @@
                         <div class="bg-yellow-50 rounded-lg p-4 text-left">
                             <h3 class="font-semibold text-yellow-900 mb-2">Next Steps:</h3>
                             <ol class="text-yellow-800 list-decimal list-inside space-y-1">
-                                <li>Save the config above to a file (e.g., <code>/etc/mailtagger/config.yaml</code>)</li>
-                                <li>Run: <code>mailtagger serve --config /path/to/config.yaml --client-secret /path/to/client_secret.json</code></li>
+                                <li>Restart mailtagger: <code class="bg-yellow-100 px-1 rounded">mailtagger serve --config ${escapeHtml(result.config_path)}</code></li>
                             </ol>
                         </div>
                     </div>
@@ -779,6 +880,9 @@
                 // Hide navigation buttons
                 elements.btnBack.classList.add('hidden');
                 elements.btnNext.classList.add('hidden');
+                
+                // Clear wizard state from storage since setup is done
+                try { sessionStorage.removeItem('mailtagger_wizard_state'); } catch(e) {}
                 
                 // Add copy button handler
                 document.getElementById('btn-copy-config').addEventListener('click', () => {
@@ -792,7 +896,7 @@
             } catch (err) {
                 showError('Failed to save: ' + err.message);
                 elements.btnNext.disabled = false;
-                elements.btnNext.textContent = 'Save & Start';
+                elements.btnNext.textContent = 'Save Configuration';
             }
         }
 
@@ -815,6 +919,7 @@
 
         // Initialize on DOM ready
         async function initAsync() {
+            restoreState();
             await checkOAuthStatus();
             init();
         }
