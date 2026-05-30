@@ -24,6 +24,9 @@ const AILabelPrefix = "AI/"
 // 0 means unlimited.
 const DefaultMaxMessagesPerTick = 50
 
+// RateLimitPause is the duration to wait when a rate limit error is detected.
+const RateLimitPause = 5 * time.Minute
+
 // GmailClientFactory creates Gmail clients for accounts.
 type GmailClientFactory interface {
 	// NewClient creates a Gmail client for the given account.
@@ -246,6 +249,29 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) (
 		}
 
 		if err := p.processMessage(ctx, client, account, msgID); err != nil {
+			if isRateLimitError(err) {
+				logger.Warn("rate limited by LLM provider, pausing before retry",
+					"message_id", msgID,
+					"pause", RateLimitPause,
+					"error", err)
+				select {
+				case <-time.After(RateLimitPause):
+					// Retry the same message after pause
+					if retryErr := p.processMessage(ctx, client, account, msgID); retryErr != nil {
+						logger.Error("message processing failed after rate limit pause",
+							"message_id", msgID,
+							"error", retryErr)
+						continue
+					}
+					processed++
+					continue
+				case <-ctx.Done():
+					if newHistoryID != "" && newHistoryID != account.HistoryID {
+						_ = p.store.UpdateHistoryID(account.ID, newHistoryID)
+					}
+					return processed, ctx.Err()
+				}
+			}
 			logger.Error("message processing failed",
 				"message_id", msgID,
 				"error", err)
@@ -484,4 +510,17 @@ func (p *Pipeline) cacheAILabelIDs(accountID int64, labelIDs map[string]string) 
 		}
 	}
 	p.aiLabelIDs[accountID] = aiLabels
+}
+
+// isRateLimitError checks if an error is a rate limit (429) error from the LLM provider.
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "429") ||
+		strings.Contains(errStr, "rate limit") ||
+		strings.Contains(errStr, "rate_limit") ||
+		strings.Contains(errStr, "too many requests") ||
+		strings.Contains(errStr, "quota exceeded")
 }
