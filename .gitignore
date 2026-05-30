@@ -50,3 +50,9 @@ docs/
 .claude/
 AGENTS.md
 CLAUDE.md
+
+# devenv (per-project dev environment)
+.devenv/
+.devenv.flake.nix
+devenv.local.nix
+.direnv/

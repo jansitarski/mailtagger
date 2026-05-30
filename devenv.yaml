@@ -1,0 +1,6 @@
+# devenv inputs. The rolling devenv-nixpkgs pin tracks a recent nixpkgs so
+# the Go toolchain below is new enough for this module (go 1.25). See
+# https://devenv.sh/inputs/ to add more.
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
