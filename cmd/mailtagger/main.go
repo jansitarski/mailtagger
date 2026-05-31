@@ -57,17 +57,21 @@ func newServeCmd() *cobra.Command {
 	var addr string
 	var clientSecretPath string
 	var encryptionKeyHex string
+	var dryRun bool
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the mailtagger HTTP server and worker",
-		Long:  `Starts the HTTP server (health, metrics, OAuth callback) and the email classification worker.`,
+		Long: `Starts the HTTP server (health, metrics, OAuth callback) and the email classification worker.
+
+Use --dry-run to classify emails without applying labels or recording them as processed.
+In dry-run mode, the pipeline logs classification results but makes no changes to Gmail or the database.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			addrOverride := ""
 			if cmd.Flags().Changed("addr") {
 				addrOverride = addr
 			}
-			return runServe(cmd.Context(), configPath, addrOverride, clientSecretPath, encryptionKeyHex)
+			return runServe(cmd.Context(), configPath, addrOverride, clientSecretPath, encryptionKeyHex, dryRun)
 		},
 	}
 
@@ -75,11 +79,12 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", ":8080", "HTTP server listen address (overrides config)")
 	cmd.Flags().StringVar(&clientSecretPath, "client-secret", "", "path to OAuth client_secret.json (required in normal mode)")
 	cmd.Flags().StringVar(&encryptionKeyHex, "encryption-key", "", "32-byte encryption key in hex (or use MAILTAGGER_ENCRYPTION_KEY env var)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "classify emails but don't apply labels or record as processed (log only)")
 
 	return cmd
 }
 
-func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, encryptionKeyHex string) error {
+func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, encryptionKeyHex string, dryRun bool) error {
 	// Load configuration first to get log settings
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -149,7 +154,7 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 		}
 	}
 
-	return runNormalMode(ctx, cfg, addrOverride, clientSecretPath, encryptionKey, st, logger)
+	return runNormalMode(ctx, cfg, addrOverride, clientSecretPath, encryptionKey, st, logger, dryRun)
 }
 
 // runSetupMode runs the server in setup wizard mode (no pipeline, serves /setup).
@@ -274,7 +279,7 @@ func runSetupMode(ctx context.Context, cfg *config.Config, configPath, addrOverr
 }
 
 // runNormalMode runs the server in normal mode (pipeline running, serves app).
-func runNormalMode(ctx context.Context, cfg *config.Config, addrOverride, clientSecretPath string, encryptionKey []byte, st *store.Store, logger *slog.Logger) error {
+func runNormalMode(ctx context.Context, cfg *config.Config, addrOverride, clientSecretPath string, encryptionKey []byte, st *store.Store, logger *slog.Logger, dryRun bool) error {
 	accounts, err := st.ListAccounts()
 	if err != nil {
 		return fmt.Errorf("failed to list accounts: %w", err)
@@ -311,7 +316,7 @@ func runNormalMode(ctx context.Context, cfg *config.Config, addrOverride, client
 	}
 
 	// Create pipeline
-	p := pipeline.New(st, cls, gmailFactory, cfg).WithLogger(logger)
+	p := pipeline.New(st, cls, gmailFactory, cfg).WithLogger(logger).WithDryRun(dryRun)
 
 	// Override addr from flag only if explicitly set
 	httpCfg := cfg.HTTP
