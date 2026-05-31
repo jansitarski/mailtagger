@@ -19,6 +19,7 @@ import (
 	"google.golang.org/api/gmail/v1"
 	"gopkg.in/yaml.v3"
 
+	"github.com/jansitarski/mailtagger/internal/admin"
 	"github.com/jansitarski/mailtagger/internal/auth"
 	"github.com/jansitarski/mailtagger/internal/classifier"
 	"github.com/jansitarski/mailtagger/internal/config"
@@ -354,6 +355,26 @@ func runNormalMode(ctx context.Context, cfg *config.Config, addrOverride, client
 	srv.Router().Get("/oauth/callback", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"oauth not configured"}`, http.StatusServiceUnavailable)
 	})
+
+	// Register /admin routes (enabled by default unless explicitly disabled)
+	adminEnabled := true
+	if cfg.Admin.Password != "" || adminEnabled {
+		adminHandler := admin.NewHandler(st, logger, dryRun)
+		srv.Router().Route("/admin", func(r chi.Router) {
+			// Add basic auth if password is configured
+			if cfg.Admin.Password != "" {
+				r.Use(admin.BasicAuth(cfg.Admin.Password))
+			}
+			// Serve API
+			r.Route("/api", func(api chi.Router) {
+				adminHandler.Routes(api)
+			})
+			// Serve static SPA
+			r.Handle("/*", http.StripPrefix("/admin", admin.StaticHandler()))
+			r.Handle("/", http.StripPrefix("/admin", admin.StaticHandler()))
+		})
+		slog.Info("admin dashboard enabled", "path", "/admin", "auth", cfg.Admin.Password != "")
+	}
 
 	// Graceful shutdown
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)

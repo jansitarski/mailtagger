@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>mailtagger admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Fallback styles if CDN unavailable */
+        body { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace; margin: 0; padding: 0; background: #0f172a; color: #e2e8f0; }
+        .card { background: #1e293b; border-radius: 0.5rem; padding: 1.5rem; border: 1px solid #334155; }
+        .badge { display: inline-block; padding: 0.125rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+        .badge-green { background: #065f46; color: #6ee7b7; }
+        .badge-yellow { background: #78350f; color: #fde68a; }
+        .badge-blue { background: #1e3a5f; color: #93c5fd; }
+        .btn { padding: 0.5rem 1rem; border-radius: 0.375rem; font-size: 0.875rem; font-weight: 500; cursor: pointer; border: none; transition: background 0.15s; }
+        .btn-red { background: #991b1b; color: #fca5a5; }
+        .btn-red:hover { background: #7f1d1d; }
+        .btn-blue { background: #1e40af; color: #bfdbfe; }
+        .btn-blue:hover { background: #1d4ed8; }
+        .tab { padding: 0.5rem 1rem; cursor: pointer; border-bottom: 2px solid transparent; color: #94a3b8; }
+        .tab.active { border-bottom-color: #3b82f6; color: #e2e8f0; }
+        .tab:hover { color: #e2e8f0; }
+    </style>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { mono: ['ui-monospace', 'SFMono-Regular', 'SF Mono', 'Menlo', 'monospace'] }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-slate-900 text-slate-200 font-mono min-h-screen">
+    <div class="max-w-7xl mx-auto px-4 py-6">
+        <!-- Header -->
+        <header class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-2xl font-bold text-white">mailtagger</h1>
+                <p class="text-sm text-slate-400">admin dashboard</p>
+            </div>
+            <div id="status-badge" class="badge badge-green">loading...</div>
+        </header>
+
+        <!-- Tabs -->
+        <nav class="flex border-b border-slate-700 mb-6">
+            <button class="tab active" data-tab="dashboard" onclick="switchTab('dashboard')">Dashboard</button>
+            <button class="tab" data-tab="history" onclick="switchTab('history')">History</button>
+            <button class="tab" data-tab="actions" onclick="switchTab('actions')">Actions</button>
+        </nav>
+
+        <!-- Dashboard Tab -->
+        <div id="tab-dashboard" class="tab-content">
+            <!-- Stats Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="card">
+                    <div class="text-sm text-slate-400 mb-1">Status</div>
+                    <div id="stat-status" class="text-xl font-bold text-emerald-400">--</div>
+                </div>
+                <div class="card">
+                    <div class="text-sm text-slate-400 mb-1">Uptime</div>
+                    <div id="stat-uptime" class="text-xl font-bold text-white">--</div>
+                </div>
+                <div class="card">
+                    <div class="text-sm text-slate-400 mb-1">Accounts</div>
+                    <div id="stat-accounts" class="text-xl font-bold text-white">--</div>
+                </div>
+                <div class="card">
+                    <div class="text-sm text-slate-400 mb-1">Processed</div>
+                    <div id="stat-processed" class="text-xl font-bold text-white">--</div>
+                </div>
+            </div>
+
+            <!-- Dry Run Banner -->
+            <div id="dry-run-banner" class="card border-yellow-600 bg-yellow-900/20 mb-6 hidden">
+                <div class="flex items-center gap-2">
+                    <span class="badge badge-yellow">DRY RUN</span>
+                    <span class="text-yellow-200 text-sm">Pipeline is in dry-run mode. Emails are classified but labels are not applied.</span>
+                </div>
+            </div>
+
+            <!-- Accounts Table -->
+            <div class="card">
+                <h2 class="text-lg font-semibold text-white mb-4">Accounts</h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-left text-slate-400 border-b border-slate-700">
+                                <th class="pb-2 pr-4">Email</th>
+                                <th class="pb-2 pr-4">History Cursor</th>
+                                <th class="pb-2 pr-4">Processed</th>
+                                <th class="pb-2 pr-4">Last Activity</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accounts-table-body">
+                            <tr><td colspan="4" class="py-4 text-slate-500">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- History Tab -->
+        <div id="tab-history" class="tab-content hidden">
+            <div class="card">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-lg font-semibold text-white">Classification History</h2>
+                    <div class="flex items-center gap-2">
+                        <select id="history-account-filter" onchange="loadHistory()" class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200">
+                            <option value="">All Accounts</option>
+                        </select>
+                        <button onclick="loadHistory()" class="btn btn-blue">Refresh</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-left text-slate-400 border-b border-slate-700">
+                                <th class="pb-2 pr-4">Time</th>
+                                <th class="pb-2 pr-4">Account</th>
+                                <th class="pb-2 pr-4">Message ID</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-table-body">
+                            <tr><td colspan="3" class="py-4 text-slate-500">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <!-- Pagination -->
+                <div class="flex items-center justify-between mt-4 pt-4 border-t border-slate-700">
+                    <div id="history-info" class="text-sm text-slate-400">--</div>
+                    <div class="flex gap-2">
+                        <button id="history-prev" onclick="historyPrev()" class="btn btn-blue" disabled>Prev</button>
+                        <button id="history-next" onclick="historyNext()" class="btn btn-blue" disabled>Next</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions Tab -->
+        <div id="tab-actions" class="tab-content hidden">
+            <div class="card mb-4">
+                <h2 class="text-lg font-semibold text-white mb-4">Reset Cursor</h2>
+                <p class="text-sm text-slate-400 mb-4">
+                    Reset the Gmail history cursor for an account. This will cause the pipeline to re-bootstrap
+                    from the current Gmail history ID on the next poll cycle.
+                </p>
+                <div class="flex items-center gap-3 mb-3">
+                    <select id="reset-account-select" class="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 flex-1">
+                        <option value="all">All Accounts</option>
+                    </select>
+                    <label class="flex items-center gap-2 text-sm text-slate-300">
+                        <input type="checkbox" id="reset-clear-processed" class="rounded">
+                        Clear processed records
+                    </label>
+                </div>
+                <button onclick="resetCursor()" class="btn btn-red">Reset Cursor</button>
+                <div id="reset-result" class="mt-3 text-sm hidden"></div>
+            </div>
+
+            <div class="card">
+                <h2 class="text-lg font-semibold text-white mb-4">Pipeline Info</h2>
+                <div class="text-sm space-y-2">
+                    <div class="flex justify-between">
+                        <span class="text-slate-400">Dry Run Mode</span>
+                        <span id="info-dryrun" class="text-white">--</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-400">Total Accounts</span>
+                        <span id="info-accounts" class="text-white">--</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-slate-400">Total Processed</span>
+                        <span id="info-processed" class="text-white">--</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // State
+    let currentTab = 'dashboard';
+    let historyOffset = 0;
+    const historyLimit = 50;
+    let historyTotal = 0;
+    let accounts = [];
+
+    // API helpers
+    const apiBase = '/admin/api';
+
+    async function api(path, opts = {}) {
+        const resp = await fetch(apiBase + path, {
+            headers: { 'Content-Type': 'application/json', ...opts.headers },
+            ...opts,
+        });
+        return resp.json();
+    }
+
+    // Tab switching
+    function switchTab(tab) {
+        currentTab = tab;
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+        document.getElementById('tab-' + tab).classList.remove('hidden');
+        document.querySelectorAll('.tab').forEach(el => {
+            el.classList.toggle('active', el.dataset.tab === tab);
+        });
+        if (tab === 'history') loadHistory();
+    }
+
+    // Dashboard
+    async function loadDashboard() {
+        try {
+            const [status, accountsResp] = await Promise.all([
+                api('/status'),
+                api('/accounts'),
+            ]);
+
+            // Status
+            document.getElementById('stat-status').textContent = status.status || 'unknown';
+            document.getElementById('stat-uptime').textContent = status.uptime || '--';
+            document.getElementById('stat-accounts').textContent = status.total_accounts || 0;
+            document.getElementById('stat-processed').textContent = (status.total_processed || 0).toLocaleString();
+            document.getElementById('status-badge').textContent = status.status === 'running' ? 'RUNNING' : status.status;
+            document.getElementById('status-badge').className = 'badge ' + (status.status === 'running' ? 'badge-green' : 'badge-yellow');
+
+            // Dry run
+            if (status.dry_run) {
+                document.getElementById('dry-run-banner').classList.remove('hidden');
+            }
+            document.getElementById('info-dryrun').textContent = status.dry_run ? 'Enabled' : 'Disabled';
+            document.getElementById('info-accounts').textContent = status.total_accounts || 0;
+            document.getElementById('info-processed').textContent = (status.total_processed || 0).toLocaleString();
+
+            // Accounts table
+            accounts = accountsResp.accounts || [];
+            renderAccountsTable(accounts);
+            populateAccountSelects(accounts);
+        } catch (err) {
+            document.getElementById('status-badge').textContent = 'ERROR';
+            document.getElementById('status-badge').className = 'badge badge-yellow';
+            console.error('Failed to load dashboard:', err);
+        }
+    }
+
+    function renderAccountsTable(accounts) {
+        const tbody = document.getElementById('accounts-table-body');
+        if (!accounts.length) {
+            tbody.innerHTML = '<tr><td colspan="4" class="py-4 text-slate-500">No accounts configured</td></tr>';
+            return;
+        }
+        tbody.innerHTML = accounts.map(acc => `
+            <tr class="border-b border-slate-800">
+                <td class="py-2 pr-4 text-white">${esc(acc.email)}</td>
+                <td class="py-2 pr-4 font-mono text-xs text-slate-400">${acc.history_id || '<span class="text-yellow-400">not set</span>'}</td>
+                <td class="py-2 pr-4">${acc.processed_count.toLocaleString()}</td>
+                <td class="py-2 pr-4 text-slate-400">${acc.last_processed_at ? timeAgo(acc.last_processed_at) : 'never'}</td>
+            </tr>
+        `).join('');
+    }
+
+    function populateAccountSelects(accounts) {
+        const selects = [
+            document.getElementById('history-account-filter'),
+            document.getElementById('reset-account-select'),
+        ];
+        selects.forEach(sel => {
+            const first = sel.options[0];
+            sel.innerHTML = '';
+            sel.appendChild(first);
+            accounts.forEach(acc => {
+                const opt = document.createElement('option');
+                opt.value = acc.id;
+                opt.textContent = acc.email;
+                sel.appendChild(opt);
+            });
+        });
+    }
+
+    // History
+    async function loadHistory() {
+        const accountFilter = document.getElementById('history-account-filter').value;
+        let url = `/history?limit=${historyLimit}&offset=${historyOffset}`;
+        if (accountFilter) url += `&account_id=${accountFilter}`;
+
+        try {
+            const data = await api(url);
+            historyTotal = data.total;
+            renderHistoryTable(data.messages);
+            updateHistoryPagination();
+        } catch (err) {
+            console.error('Failed to load history:', err);
+        }
+    }
+
+    function renderHistoryTable(messages) {
+        const tbody = document.getElementById('history-table-body');
+        if (!messages.length) {
+            tbody.innerHTML = '<tr><td colspan="3" class="py-4 text-slate-500">No processed messages</td></tr>';
+            return;
+        }
+        tbody.innerHTML = messages.map(msg => `
+            <tr class="border-b border-slate-800">
+                <td class="py-2 pr-4 text-slate-400 text-xs">${formatTime(msg.processed_at)}</td>
+                <td class="py-2 pr-4 text-white">${esc(msg.email)}</td>
+                <td class="py-2 pr-4 font-mono text-xs text-slate-400">${esc(msg.message_id)}</td>
+            </tr>
+        `).join('');
+    }
+
+    function updateHistoryPagination() {
+        const info = document.getElementById('history-info');
+        const start = historyOffset + 1;
+        const end = Math.min(historyOffset + historyLimit, historyTotal);
+        info.textContent = historyTotal > 0 ? `${start}-${end} of ${historyTotal.toLocaleString()}` : 'No records';
+
+        document.getElementById('history-prev').disabled = historyOffset === 0;
+        document.getElementById('history-next').disabled = historyOffset + historyLimit >= historyTotal;
+    }
+
+    function historyPrev() {
+        historyOffset = Math.max(0, historyOffset - historyLimit);
+        loadHistory();
+    }
+
+    function historyNext() {
+        historyOffset += historyLimit;
+        loadHistory();
+    }
+
+    // Actions
+    async function resetCursor() {
+        const select = document.getElementById('reset-account-select');
+        const account = select.value === 'all' ? 'all' : accounts.find(a => a.id == select.value)?.email || select.value;
+        const clearProcessed = document.getElementById('reset-clear-processed').checked;
+
+        const resultEl = document.getElementById('reset-result');
+        resultEl.classList.remove('hidden');
+        resultEl.className = 'mt-3 text-sm text-slate-400';
+        resultEl.textContent = 'Resetting...';
+
+        try {
+            const data = await api('/reset-cursor', {
+                method: 'POST',
+                body: JSON.stringify({ account, clear_processed: clearProcessed }),
+            });
+
+            if (data.error) {
+                resultEl.className = 'mt-3 text-sm text-red-400';
+                resultEl.textContent = 'Error: ' + data.error;
+            } else {
+                resultEl.className = 'mt-3 text-sm text-emerald-400';
+                let msg = 'Cursor reset successfully.';
+                if (data.messages_cleared > 0) {
+                    msg += ` Cleared ${data.messages_cleared} processed record(s).`;
+                }
+                resultEl.textContent = msg;
+                // Refresh dashboard
+                setTimeout(loadDashboard, 500);
+            }
+        } catch (err) {
+            resultEl.className = 'mt-3 text-sm text-red-400';
+            resultEl.textContent = 'Request failed: ' + err.message;
+        }
+    }
+
+    // Utilities
+    function esc(str) {
+        const div = document.createElement('div');
+        div.textContent = str || '';
+        return div.innerHTML;
+    }
+
+    function timeAgo(dateStr) {
+        const date = new Date(dateStr);
+        const now = new Date();
+        const seconds = Math.floor((now - date) / 1000);
+        if (seconds < 60) return 'just now';
+        if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+        if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+        return Math.floor(seconds / 86400) + 'd ago';
+    }
+
+    function formatTime(dateStr) {
+        const date = new Date(dateStr);
+        return date.toLocaleString();
+    }
+
+    // Initialize
+    loadDashboard();
+    // Auto-refresh every 30s
+    setInterval(() => {
+        if (currentTab === 'dashboard') loadDashboard();
+    }, 30000);
+    </script>
+</body>
+</html>
