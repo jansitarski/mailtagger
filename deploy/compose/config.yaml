@@ -1,18 +1,31 @@
-# mailtagger example configuration
-log_level: info
-mode: poll
-poll_interval: 30s
+# mailtagger configuration for docker-compose.
+# All duration fields accept Go duration strings ("5m", "30s", "1h").
+# ${VAR} references are expanded from the environment (see docker-compose.yml).
 
 llm:
   provider: openai
   model: gpt-4o-mini
   api_key: ${OPENAI_API_KEY}
   base_url: ""
-  max_body_chars: 4000
   temperature: 0.1
+  max_tokens: 200
   timeout: 30s
 
-label_prefix: "AI/"
+poll_interval: 30s
+
+store:
+  type: sqlite
+  path: /var/lib/mailtagger/state.db
+
+http:
+  addr: ":8080"
+  read_timeout: 10s
+  write_timeout: 10s
+  metrics_enabled: true
+
+log:
+  level: info
+  format: json
 
 categories:
   - name: Work
@@ -39,14 +52,7 @@ categories:
   - name: Alerts
     label: AI/Alerts
     description: "Security or change notifications about accounts/infrastructure"
+  # Required fallback category (must be named exactly "Others").
   - name: Others
     label: AI/Others
     description: "Relevant emails that don't clearly fit elsewhere"
-
-store:
-  path: /var/lib/mailtagger/state.db
-  retention_days: 90
-
-http:
-  addr: ":8080"
-  metrics: true
