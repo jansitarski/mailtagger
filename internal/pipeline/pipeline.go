@@ -27,6 +27,10 @@ const DefaultMaxMessagesPerTick = 50
 // RateLimitPause is the duration to wait when a rate limit error is detected.
 const RateLimitPause = 5 * time.Minute
 
+// DefaultMaxBodyChars is the maximum number of message-body characters sent to
+// the LLM when body classification is opted in via the include_body config option.
+const DefaultMaxBodyChars = 4000
+
 // GmailClientFactory creates Gmail clients for accounts.
 type GmailClientFactory interface {
 	// NewClient creates a Gmail client for the given account.
@@ -340,29 +344,34 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 		return nil
 	}
 
-	// 1. Fetch the full message
-	msg, err := client.GetMessage(ctx, messageID)
+	// 1. Fetch the message. By default we fetch metadata only (headers + labels;
+	// the body is never retrieved). If the operator has opted in via include_body,
+	// fetch the full message so we can include a trimmed body in classification.
+	var msg *gmail.Message
+	if p.config.IncludeBody {
+		msg, err = client.GetMessageWithBody(ctx, messageID)
+	} else {
+		msg, err = client.GetMessage(ctx, messageID)
+	}
 	if err != nil {
 		return err
 	}
 
-	// 2. Extract the body for classification
-	body, err := gmail.ExtractBody(msg.RawMessage)
-	if err != nil {
-		// Use snippet as fallback
-		body = msg.Snippet
-	}
-
-	// Clean the body (strip quoted replies, truncate)
-	body = gmail.CleanBody(body, 4000) // 4k chars max for LLM
-
-	// 3. Classify the email
+	// 2. Build the classification input. Sender and subject are always used; the
+	// message body is included only when include_body is enabled, since it may
+	// contain private content.
 	classifyStart := time.Now()
 	email := classifier.Email{
 		ID:      messageID,
 		From:    msg.From,
 		Subject: msg.Subject,
-		Body:    body,
+	}
+	if p.config.IncludeBody {
+		body, extractErr := gmail.ExtractBody(msg.RawMessage)
+		if extractErr != nil {
+			body = msg.Snippet
+		}
+		email.Body = gmail.CleanBody(body, DefaultMaxBodyChars)
 	}
 
 	decision, err := p.classifier.Classify(ctx, email)

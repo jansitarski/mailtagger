@@ -37,6 +37,14 @@ llm:
 # How often to poll Gmail for new messages
 poll_interval: 5m
 
+# Whether to send the message body to the LLM for classification.
+# Default: false. When false, only the sender and subject are sent, and the
+# message body is never even fetched from Gmail. Set to true to opt in to also
+# sending a trimmed portion of the body (up to ~4,000 characters) — this can
+# improve accuracy but sends potentially private message content to your LLM
+# provider.
+include_body: false
+
 # State storage configuration
 store:
   # Storage type: "sqlite" (persistent) or "memory" (in-memory, for testing)

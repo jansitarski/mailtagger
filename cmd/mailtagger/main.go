@@ -998,6 +998,7 @@ func marshalConfig(cfg *config.Config) ([]byte, error) {
 	type yamlConfig struct {
 		LLM              config.LLMConfig   `yaml:"llm"`
 		PollInterval     string             `yaml:"poll_interval"`
+		IncludeBody      bool               `yaml:"include_body"`
 		Store            config.StoreConfig  `yaml:"store"`
 		HTTP             config.HTTPConfig   `yaml:"http"`
 		Log              config.LogConfig    `yaml:"log"`
@@ -1009,6 +1010,7 @@ func marshalConfig(cfg *config.Config) ([]byte, error) {
 	out := yamlConfig{
 		LLM:              cfg.LLM,
 		PollInterval:     cfg.PollInterval,
+		IncludeBody:      cfg.IncludeBody,
 		Store:            cfg.Store,
 		HTTP:             cfg.HTTP,
 		Log:              cfg.Log,

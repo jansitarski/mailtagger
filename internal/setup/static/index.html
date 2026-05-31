@@ -107,6 +107,7 @@
                 llmProvider: '',
                 llmApiKey: '',
                 llmModel: '',
+                includeBody: false,
                 categories: []
             }
         };
@@ -239,11 +240,14 @@
                     <div class="text-left bg-yellow-50 rounded-lg p-4">
                         <h3 class="font-semibold text-yellow-900 mb-2">Permissions required:</h3>
                         <ul class="text-yellow-800 space-y-1 text-sm">
-                            <li>• <strong>gmail.modify</strong> - To read messages and apply labels</li>
-                            <li>• <strong>gmail.labels</strong> - To create and manage labels</li>
+                            <li>• <strong>gmail.modify</strong> — read messages and create/apply labels</li>
+                            <li>• <strong>userinfo.email</strong> — identify which account you're connecting</li>
                         </ul>
                         <p class="text-yellow-700 text-sm mt-2">
-                            mailtagger only reads message metadata (subject, from, snippet) - not full message content.
+                            By default, mailtagger sends only the <strong>sender and subject</strong> of each
+                            message to the LLM you configure — the body is never fetched from Gmail. You can
+                            optionally enable sending the message body later in this wizard. Your messages are
+                            never changed beyond the labels it applies.
                         </p>
                     </div>
                 </div>
@@ -403,6 +407,21 @@
                             Test Connection
                         </button>
                         <span id="test-result" class="ml-2"></span>
+
+                        <div class="mt-4 border-t pt-4">
+                            <label for="llm-include-body" class="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
+                                <input type="checkbox" id="llm-include-body" class="mt-1" ${state.data.includeBody ? 'checked' : ''}>
+                                <span>
+                                    <span class="font-medium">Also send the message body for classification</span>
+                                    <span class="block text-gray-500 mt-0.5">
+                                        Off by default — only the sender and subject are sent to the LLM, and the
+                                        body is never fetched from Gmail. Enable only if you're comfortable sending
+                                        message content (up to ~4,000 characters) to your provider. May improve
+                                        accuracy for hard-to-classify emails.
+                                    </span>
+                                </span>
+                            </label>
+                        </div>
                     </div>
                 </div>
             `,
@@ -443,6 +462,9 @@
                             <h3 class="font-semibold text-gray-900 mb-2">LLM Provider</h3>
                             <p class="text-gray-600">
                                 ${state.data.llmProvider || 'Not configured'} - ${state.data.llmModel || 'No model selected'}
+                            </p>
+                            <p class="text-gray-500 text-sm mt-1">
+                                Message body: ${state.data.includeBody ? 'included in classification' : 'not sent (sender + subject only)'}
                             </p>
                         </div>
                         
@@ -604,7 +626,14 @@
                 });
                 
                 document.getElementById('btn-test-llm').addEventListener('click', testLLMConnection);
-                
+
+                const includeBodyEl = document.getElementById('llm-include-body');
+                if (includeBodyEl) {
+                    includeBodyEl.addEventListener('change', (e) => {
+                        state.data.includeBody = e.target.checked;
+                    });
+                }
+
                 // Initialize hints and dropdown for current provider
                 if (state.data.llmProvider) {
                     modelHint.textContent = modelHints[state.data.llmProvider] || '';
