@@ -120,7 +120,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 	}
 
-	p.logger.Info("pipeline starting", "poll_interval", pollInterval, "dry_run", p.dryRun)
+	p.logger.Info("pipeline starting", "poll_interval", pollInterval.String(), "dry_run", p.dryRun)
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -194,7 +194,9 @@ func (p *Pipeline) tick(ctx context.Context) error {
 	// Record tick messages processed
 	metrics.TickMessagesProcessed.WithLabelValues().Observe(float64(totalProcessed))
 
-	p.logger.Debug("tick completed", "latency_ms", time.Since(tickStart).Milliseconds(), "messages_processed", totalProcessed)
+	// Heartbeat at Info so the operator can see the pipeline is alive and polling,
+	// even when a poll finds no new mail. Per-message details are logged separately.
+	p.logger.Info("poll complete", "accounts", len(accounts), "messages_processed", totalProcessed, "latency_ms", time.Since(tickStart).Milliseconds())
 
 	return nil
 }
