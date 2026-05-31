@@ -43,9 +43,21 @@ func NewHandler(store AccountChecker, logger *slog.Logger) *Handler {
 	}
 }
 
-// ServeHTTP serves the setup wizard.
-// Access control is handled by the token middleware, so this just serves the static files.
+// ServeHTTP serves the setup wizard, or returns 503 if setup is already
+// complete (i.e. at least one account exists). Token-based access control is
+// handled separately by the token middleware.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// If setup is already complete, the wizard is closed.
+	hasAccounts, err := h.store.HasAccounts()
+	if err != nil {
+		h.respondError(w, http.StatusInternalServerError, "failed to check setup state")
+		return
+	}
+	if hasAccounts {
+		h.respondError(w, http.StatusServiceUnavailable, "setup already complete")
+		return
+	}
+
 	// Determine what file to serve
 	path := r.URL.Path
 	
