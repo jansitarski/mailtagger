@@ -50,7 +50,7 @@ type LogConfig struct {
 
 // AdminConfig defines admin dashboard settings.
 type AdminConfig struct {
-	Enabled  bool   `yaml:"enabled"`  // enable admin dashboard at /admin (default: true if not set)
+	Enabled  *bool  `yaml:"enabled"`  // nil = enabled by default; set to false to disable the /admin dashboard
 	Password string `yaml:"password"` // optional basic auth password (username is always "admin")
 }
 

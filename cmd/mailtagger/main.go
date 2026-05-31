@@ -355,9 +355,9 @@ func runNormalMode(ctx context.Context, cfg *config.Config, addrOverride, client
 		http.Error(w, `{"error":"oauth not configured"}`, http.StatusServiceUnavailable)
 	})
 
-	// Register /admin routes (enabled by default unless explicitly disabled)
-	adminEnabled := true
-	if cfg.Admin.Password != "" || adminEnabled {
+	// Register /admin routes (enabled by default unless explicitly disabled via admin.enabled: false)
+	adminEnabled := cfg.Admin.Enabled == nil || *cfg.Admin.Enabled
+	if adminEnabled {
 		adminHandler := admin.NewHandler(st, logger, dryRun)
 		srv.Router().Route("/admin", func(r chi.Router) {
 			// Add basic auth if password is configured
