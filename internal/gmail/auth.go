@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"golang.org/x/oauth2"
@@ -79,7 +80,16 @@ func (s *StoreTokenSource) Token() (*oauth2.Token, error) {
 	// Decrypt the token
 	tokenJSON, err := s.crypto.DecryptToken(encryptedToken, s.encryptKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt token: %w", err)
+		// An AES-GCM authentication failure here almost always means the
+		// configured encryption key differs from the one used when this account
+		// was authenticated (rather than corrupted data). Surface an actionable
+		// message instead of the opaque "cipher: message authentication failed".
+		if strings.Contains(err.Error(), "message authentication failed") {
+			return nil, fmt.Errorf("could not decrypt the stored OAuth token for %s: the encryption key does not match the one used when this account was authenticated. "+
+				"Verify MAILTAGGER_ENCRYPTION_KEY (it takes precedence over the --encryption-key flag and the config encryption_key) matches that key, "+
+				"or re-run 'mailtagger auth' to re-store the token (underlying error: %w)", s.email, err)
+		}
+		return nil, fmt.Errorf("failed to decrypt OAuth token for %s: %w", s.email, err)
 	}
 
 	// Parse the token
