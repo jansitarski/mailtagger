@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/gmail/v1"
+	"gopkg.in/yaml.v3"
 
 	"github.com/jansitarski/mailtagger/internal/auth"
 	"github.com/jansitarski/mailtagger/internal/classifier"
@@ -45,6 +47,7 @@ It polls Gmail, classifies new messages with an LLM, and applies labels.`,
 	rootCmd.AddCommand(newServeCmd())
 	rootCmd.AddCommand(newAuthCmd())
 	rootCmd.AddCommand(newResetCursorCmd())
+	rootCmd.AddCommand(newSetupCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -775,4 +778,219 @@ func resetSingleAccount(st *store.Store, accountFlag string, clearProcessed bool
 
 	fmt.Println("\nThe pipeline will re-bootstrap from the current Gmail history on next poll cycle.")
 	return nil
+}
+
+func newSetupCmd() *cobra.Command {
+	var dbPath string
+	var configPath string
+	var clientSecretPath string
+
+	cmd := &cobra.Command{
+		Use:   "setup",
+		Short: "Initialize mailtagger for headless environments (no web wizard)",
+		Long: `Prepares the mailtagger environment without the web-based setup wizard.
+This is useful for headless servers, Docker containers, or CI environments
+where a browser is not available.
+
+This command will:
+  1. Initialize the SQLite database and run migrations
+  2. Generate an encryption key (if not already in config)
+  3. Copy client_secret.json to the config directory (if provided)
+  4. Write the config file with the encryption key embedded
+
+After running this command, use 'mailtagger auth' to authenticate Gmail accounts,
+then 'mailtagger serve' to start the pipeline.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSetup(dbPath, configPath, clientSecretPath)
+		},
+	}
+
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/mailtagger/state.db", "path to SQLite database")
+	cmd.Flags().StringVarP(&configPath, "config", "c", "/etc/mailtagger/config.yaml", "path to config file to create/update")
+	cmd.Flags().StringVar(&clientSecretPath, "client-secret", "", "path to OAuth client_secret.json to copy into config directory")
+
+	return cmd
+}
+
+func runSetup(dbPath, configPath, clientSecretPath string) error {
+	fmt.Println("mailtagger Local Setup")
+	fmt.Println("======================")
+	fmt.Println()
+
+	// 1. Ensure database directory exists
+	dbDir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dbDir, 0755); err != nil {
+		return fmt.Errorf("failed to create database directory %s: %w", dbDir, err)
+	}
+
+	// 2. Initialize the database
+	st, err := store.Open(dbPath, 30)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer st.Close()
+
+	if err := st.Migrate(); err != nil {
+		return fmt.Errorf("failed to migrate database: %w", err)
+	}
+	fmt.Printf("  [ok] Database initialized: %s\n", dbPath)
+
+	// 3. Generate encryption key
+	encKey := make([]byte, 32)
+	if _, err := rand.Read(encKey); err != nil {
+		return fmt.Errorf("failed to generate encryption key: %w", err)
+	}
+	encKeyHex := hex.EncodeToString(encKey)
+	fmt.Printf("  [ok] Encryption key generated\n")
+
+	// 4. Load or create config
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory %s: %w", configDir, err)
+	}
+
+	// Check if config already exists
+	var cfg *config.Config
+	existingCfg, loadErr := config.Load(configPath)
+	if loadErr == nil {
+		cfg = existingCfg
+		// Preserve existing encryption key if set
+		if cfg.EncryptionKey != "" {
+			encKeyHex = cfg.EncryptionKey
+			fmt.Printf("  [ok] Using existing encryption key from config\n")
+		} else {
+			cfg.EncryptionKey = encKeyHex
+		}
+	} else {
+		// Create a new default config
+		cfg = &config.Config{
+			LLM: config.LLMConfig{
+				Provider:    "openai",
+				Model:       "gpt-4-turbo",
+				APIKey:      "${OPENAI_API_KEY}",
+				Temperature: 0.1,
+				MaxTokens:   200,
+				Timeout:     "30s",
+			},
+			Store: config.StoreConfig{
+				Type: "sqlite",
+				Path: dbPath,
+			},
+			HTTP: config.HTTPConfig{
+				Addr:           ":8080",
+				ReadTimeout:    "10s",
+				WriteTimeout:   "10s",
+				MetricsEnabled: true,
+			},
+			Log: config.LogConfig{
+				Level:  "info",
+				Format: "json",
+			},
+			PollInterval:  "5m",
+			EncryptionKey: encKeyHex,
+			Categories: []config.Category{
+				{
+					Name:        "newsletter",
+					Label:       "AI/newsletter",
+					Description: "Marketing emails, promotional content, newsletters from companies or products.",
+				},
+				{
+					Name:        "receipt",
+					Label:       "AI/receipt",
+					Description: "Purchase confirmations, order receipts, payment confirmations, invoices.",
+				},
+				{
+					Name:        "notification",
+					Label:       "AI/notification",
+					Description: "Service notifications, alerts, status updates, automated system messages.",
+				},
+				{
+					Name:        "personal",
+					Label:       "AI/personal",
+					Description: "Personal correspondence from individuals, family, or friends.",
+				},
+			},
+		}
+	}
+
+	// 5. Copy client_secret.json if provided
+	if clientSecretPath != "" {
+		srcData, err := os.ReadFile(clientSecretPath)
+		if err != nil {
+			return fmt.Errorf("failed to read client_secret.json: %w", err)
+		}
+
+		destPath := filepath.Join(configDir, "client_secret.json")
+		if err := os.WriteFile(destPath, srcData, 0600); err != nil {
+			return fmt.Errorf("failed to write client_secret.json: %w", err)
+		}
+		cfg.ClientSecretPath = destPath
+		fmt.Printf("  [ok] Client secret copied to: %s\n", destPath)
+	}
+
+	// 6. Ensure store path matches
+	cfg.Store.Path = dbPath
+
+	// 7. Write config file
+	yamlBytes, err := marshalConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+	if err := os.WriteFile(configPath, yamlBytes, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	fmt.Printf("  [ok] Config written to: %s\n", configPath)
+
+	// Print summary
+	fmt.Println()
+	fmt.Println("======================")
+	fmt.Println("Setup complete!")
+	fmt.Println("======================")
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println()
+	fmt.Println("  1. Set your LLM API key:")
+	fmt.Printf("       export OPENAI_API_KEY=your-key-here\n")
+	fmt.Println()
+	if clientSecretPath == "" {
+		fmt.Println("  2. Provide your OAuth client_secret.json:")
+		fmt.Printf("       mailtagger auth --client-secret /path/to/client_secret.json --db %s --encryption-key %s\n", dbPath, encKeyHex)
+	} else {
+		fmt.Println("  2. Authenticate a Gmail account:")
+		fmt.Printf("       mailtagger auth --client-secret %s --db %s --encryption-key %s\n", cfg.ClientSecretPath, dbPath, encKeyHex)
+	}
+	fmt.Println()
+	fmt.Println("  3. Start the pipeline:")
+	fmt.Printf("       mailtagger serve --config %s\n", configPath)
+	fmt.Println()
+	fmt.Printf("  Encryption key (save this): %s\n", encKeyHex)
+
+	return nil
+}
+
+// marshalConfig serializes a Config to YAML bytes.
+func marshalConfig(cfg *config.Config) ([]byte, error) {
+	type yamlConfig struct {
+		LLM              config.LLMConfig   `yaml:"llm"`
+		PollInterval     string             `yaml:"poll_interval"`
+		Store            config.StoreConfig  `yaml:"store"`
+		HTTP             config.HTTPConfig   `yaml:"http"`
+		Log              config.LogConfig    `yaml:"log"`
+		Categories       []config.Category   `yaml:"categories"`
+		ClientSecretPath string             `yaml:"client_secret_path,omitempty"`
+		EncryptionKey    string             `yaml:"encryption_key"`
+	}
+
+	out := yamlConfig{
+		LLM:              cfg.LLM,
+		PollInterval:     cfg.PollInterval,
+		Store:            cfg.Store,
+		HTTP:             cfg.HTTP,
+		Log:              cfg.Log,
+		Categories:       cfg.Categories,
+		ClientSecretPath: cfg.ClientSecretPath,
+		EncryptionKey:    cfg.EncryptionKey,
+	}
+
+	return yaml.Marshal(out)
 }
