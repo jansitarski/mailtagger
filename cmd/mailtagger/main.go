@@ -654,33 +654,120 @@ func generateState() (string, error) {
 }
 
 func newResetCursorCmd() *cobra.Command {
-	var accountID string
+	var accountFlag string
 	var dbPath string
+	var clearProcessed bool
 
 	cmd := &cobra.Command{
 		Use:   "reset-cursor",
 		Short: "Reset the Gmail history cursor to re-process messages",
 		Long: `Resets the history_id cursor for an account, causing mailtagger to re-process
-messages from the beginning. Use this if you want to re-classify all emails.
-WARNING: This may result in duplicate label applications if messages are already labeled.`,
+messages from the beginning on the next poll cycle. Use --account to specify
+which account to reset (by email or numeric ID), or 'all' for all accounts.
+
+WARNING: This may result in duplicate label applications if messages are already labeled.
+Use --clear-processed to also remove the processed_messages dedup records.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runResetCursor(accountID, dbPath)
+			return runResetCursor(accountFlag, dbPath, clearProcessed)
 		},
 	}
 
-	cmd.Flags().StringVar(&accountID, "account", "", "account ID to reset (required, or 'all' for all accounts)")
+	cmd.Flags().StringVar(&accountFlag, "account", "", "account to reset: email address, numeric ID, or 'all'")
 	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/mailtagger/state.db", "path to SQLite database")
+	cmd.Flags().BoolVar(&clearProcessed, "clear-processed", false, "also delete processed_messages records for the account(s)")
 	cmd.MarkFlagRequired("account")
 
 	return cmd
 }
 
-func runResetCursor(accountID, dbPath string) error {
-	slog.Info("reset-cursor command placeholder", "account", accountID, "db", dbPath)
-	fmt.Println("Cursor reset not yet implemented.")
-	fmt.Println("This will:")
-	fmt.Println("  1. Open the database at", dbPath)
-	fmt.Println("  2. Reset history_id for account:", accountID)
-	fmt.Println("  3. Optionally clear processed_messages for the account")
+func runResetCursor(accountFlag, dbPath string, clearProcessed bool) error {
+	// Open database
+	st, err := store.Open(dbPath, 30)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer st.Close()
+
+	// Run migrations
+	if err := st.Migrate(); err != nil {
+		return fmt.Errorf("failed to migrate database: %w", err)
+	}
+
+	if accountFlag == "all" {
+		return resetAllAccounts(st, clearProcessed)
+	}
+
+	return resetSingleAccount(st, accountFlag, clearProcessed)
+}
+
+func resetAllAccounts(st *store.Store, clearProcessed bool) error {
+	// List accounts first for reporting
+	accounts, err := st.ListAccounts()
+	if err != nil {
+		return fmt.Errorf("failed to list accounts: %w", err)
+	}
+	if len(accounts) == 0 {
+		fmt.Println("No accounts found in the database.")
+		return nil
+	}
+
+	// Reset all history IDs
+	resetCount, err := st.ResetAllHistoryIDs()
+	if err != nil {
+		return fmt.Errorf("failed to reset history IDs: %w", err)
+	}
+
+	fmt.Printf("Reset history_id for %d account(s):\n", resetCount)
+	for _, acc := range accounts {
+		fmt.Printf("  - %s (ID: %d)\n", acc.Email, acc.ID)
+	}
+
+	if clearProcessed {
+		deleted, err := st.DeleteAllProcessedMessages()
+		if err != nil {
+			return fmt.Errorf("failed to clear processed messages: %w", err)
+		}
+		fmt.Printf("Cleared %d processed message record(s).\n", deleted)
+	}
+
+	fmt.Println("\nThe pipeline will re-bootstrap from the current Gmail history on next poll cycle.")
+	return nil
+}
+
+func resetSingleAccount(st *store.Store, accountFlag string, clearProcessed bool) error {
+	// Try to find account by email first, then by numeric ID
+	var account *store.Account
+	var err error
+
+	account, err = st.GetAccountByEmail(accountFlag)
+	if err == store.ErrAccountNotFound {
+		// Try as numeric ID
+		var id int64
+		if _, parseErr := fmt.Sscanf(accountFlag, "%d", &id); parseErr == nil {
+			account, err = st.GetAccount(id)
+		}
+	}
+	if err != nil {
+		if err == store.ErrAccountNotFound {
+			return fmt.Errorf("account not found: %s", accountFlag)
+		}
+		return fmt.Errorf("failed to get account: %w", err)
+	}
+
+	// Reset history ID
+	if err := st.ResetHistoryID(account.ID); err != nil {
+		return fmt.Errorf("failed to reset history_id: %w", err)
+	}
+	fmt.Printf("Reset history_id for account: %s (ID: %d)\n", account.Email, account.ID)
+
+	if clearProcessed {
+		deleted, err := st.DeleteProcessedMessages(account.ID)
+		if err != nil {
+			return fmt.Errorf("failed to clear processed messages: %w", err)
+		}
+		fmt.Printf("Cleared %d processed message record(s).\n", deleted)
+	}
+
+	fmt.Println("\nThe pipeline will re-bootstrap from the current Gmail history on next poll cycle.")
 	return nil
 }

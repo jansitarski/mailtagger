@@ -145,3 +145,72 @@ func (s *Store) AccountCount() (int, error) {
 	}
 	return count, nil
 }
+
+// ResetHistoryID resets the history_id for an account to empty string.
+// This causes the pipeline to re-bootstrap from the current Gmail history ID on next tick.
+func (s *Store) ResetHistoryID(accountID int64) error {
+	result, err := s.db.Exec(`
+		UPDATE accounts
+		SET history_id = '', updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, accountID)
+	if err != nil {
+		return fmt.Errorf("failed to reset history_id: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rows == 0 {
+		return ErrAccountNotFound
+	}
+	return nil
+}
+
+// ResetAllHistoryIDs resets the history_id for all accounts to empty string.
+// Returns the number of accounts that were reset.
+func (s *Store) ResetAllHistoryIDs() (int64, error) {
+	result, err := s.db.Exec(`
+		UPDATE accounts
+		SET history_id = '', updated_at = CURRENT_TIMESTAMP
+		WHERE history_id != ''
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to reset all history_ids: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rows, nil
+}
+
+// DeleteProcessedMessages deletes all processed message records for an account.
+// Returns the number of records deleted.
+func (s *Store) DeleteProcessedMessages(accountID int64) (int64, error) {
+	result, err := s.db.Exec(`
+		DELETE FROM processed_messages WHERE account_id = ?
+	`, accountID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete processed messages: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rows, nil
+}
+
+// DeleteAllProcessedMessages deletes all processed message records for all accounts.
+// Returns the number of records deleted.
+func (s *Store) DeleteAllProcessedMessages() (int64, error) {
+	result, err := s.db.Exec(`DELETE FROM processed_messages`)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete all processed messages: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return rows, nil
+}
