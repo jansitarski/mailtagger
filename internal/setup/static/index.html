@@ -66,7 +66,7 @@
 
         <!-- Progress Steps -->
         <nav class="mb-8">
-            <ol id="progress-steps" class="flex items-center justify-center space-x-4">
+            <ol id="progress-steps" class="flex flex-wrap items-center justify-center gap-y-2">
                 <!-- Steps will be rendered by JS -->
             </ol>
         </nav>
@@ -87,7 +87,7 @@
         </div>
 
         <!-- Error Alert -->
-        <div id="error-alert" class="hidden mt-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
+        <div id="error-alert" role="alert" aria-live="assertive" class="hidden mt-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg">
             <p id="error-message"></p>
         </div>
     </div>
@@ -107,6 +107,7 @@
                 llmProvider: '',
                 llmApiKey: '',
                 llmModel: '',
+                includeBody: false,
                 categories: []
             }
         };
@@ -168,17 +169,22 @@
             elements.progressSteps.innerHTML = steps.map((step, index) => {
                 const isActive = index === state.currentStep;
                 const isCompleted = state.completedSteps.includes(index);
+                const canNavigate = isCompleted && !isActive;
                 const classes = [
                     'step-indicator',
                     'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium',
                     isActive ? 'active' : '',
-                    isCompleted ? 'completed' : 'bg-gray-200 text-gray-600'
+                    isCompleted ? 'completed' : 'bg-gray-200 text-gray-600',
+                    canNavigate ? 'cursor-pointer hover:ring-2 hover:ring-blue-300' : ''
                 ].join(' ');
 
                 return `
                     <li class="flex items-center">
-                        <span class="${classes}" title="${step.title}">${step.shortTitle}</span>
-                        ${index < steps.length - 1 ? '<span class="w-8 h-0.5 bg-gray-300 mx-1"></span>' : ''}
+                        <span class="${classes}"
+                              ${isActive ? 'aria-current="step"' : ''}
+                              ${canNavigate ? `role="button" tabindex="0" data-step="${index}"` : ''}
+                              title="${step.title}">${step.shortTitle}</span>
+                        ${index < steps.length - 1 ? '<span class="w-6 h-0.5 bg-gray-300 mx-1"></span>' : ''}
                     </li>
                 `;
             }).join('');
@@ -197,6 +203,13 @@
                 const setupHandler = pageSetupHandlers[step.id];
                 if (setupHandler) {
                     setupHandler();
+                }
+
+                // Move focus to the step heading for keyboard / screen-reader users
+                const heading = elements.pageContent.querySelector('h2');
+                if (heading) {
+                    heading.setAttribute('tabindex', '-1');
+                    heading.focus({ preventScroll: true });
                 }
             }
 
@@ -227,11 +240,14 @@
                     <div class="text-left bg-yellow-50 rounded-lg p-4">
                         <h3 class="font-semibold text-yellow-900 mb-2">Permissions required:</h3>
                         <ul class="text-yellow-800 space-y-1 text-sm">
-                            <li>• <strong>gmail.modify</strong> - To read messages and apply labels</li>
-                            <li>• <strong>gmail.labels</strong> - To create and manage labels</li>
+                            <li>• <strong>gmail.modify</strong> — read messages and create/apply labels</li>
+                            <li>• <strong>userinfo.email</strong> — identify which account you're connecting</li>
                         </ul>
                         <p class="text-yellow-700 text-sm mt-2">
-                            mailtagger only reads message metadata (subject, from, snippet) - not full message content.
+                            By default, mailtagger sends only the <strong>sender and subject</strong> of each
+                            message to the LLM you configure — the body is never fetched from Gmail. You can
+                            optionally enable sending the message body later in this wizard. Your messages are
+                            never changed beyond the labels it applies.
                         </p>
                     </div>
                 </div>
@@ -288,31 +304,39 @@
                 </div>
             `,
 
-            'client-secret': () => `
+            'client-secret': () => {
+                const cs = state.data.clientSecret;
+                const info = cs ? (cs.installed || cs.web) : null;
+                const clientIdText = info && info.client_id
+                    ? 'Client ID: ' + escapeHtml(info.client_id.substring(0, 30)) + '...'
+                    : '';
+                return `
                 <div>
                     <h2 class="text-2xl font-bold text-gray-900 mb-4">Upload OAuth Credentials</h2>
                     <p class="text-gray-600 mb-6">
                         Download the JSON file from Google Cloud Console and upload it here.
+                        ${cs ? 'Already uploaded — drop a new file to replace it.' : ''}
                     </p>
-                    
+
                     <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer">
                         <div class="text-4xl mb-4">📁</div>
                         <p class="text-gray-600 mb-2">Drag and drop your <code>client_secret.json</code> here</p>
                         <p class="text-gray-500 text-sm">or click to browse</p>
                         <input type="file" id="file-input" accept=".json" class="hidden">
                     </div>
-                    
-                    <div id="file-info" class="hidden mt-4 p-4 bg-green-50 rounded-lg">
+
+                    <div id="file-info" class="${cs ? '' : 'hidden'} mt-4 p-4 bg-green-50 rounded-lg">
                         <div class="flex items-center">
                             <span class="text-green-600 text-2xl mr-3">✓</span>
                             <div>
                                 <p class="font-semibold text-green-800">Credentials loaded</p>
-                                <p id="client-id-display" class="text-sm text-green-700"></p>
+                                <p id="client-id-display" class="text-sm text-green-700">${clientIdText}</p>
                             </div>
                         </div>
                     </div>
                 </div>
-            `,
+            `;
+            },
 
             'gmail-auth': () => `
                 <div class="text-center">
@@ -349,7 +373,7 @@
                     
                     <div class="space-y-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Provider</label>
+                            <label for="llm-provider" class="block text-sm font-medium text-gray-700 mb-1">Provider</label>
                             <select id="llm-provider" class="w-full border rounded-lg px-3 py-2">
                                 <option value="">Select a provider...</option>
                                 <option value="openai" ${state.data.llmProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
@@ -360,15 +384,15 @@
                         </div>
                         
                         <div id="api-key-field" class="${state.data.llmProvider === 'ollama' ? 'hidden' : ''}">
-                            <label class="block text-sm font-medium text-gray-700 mb-1">API Key</label>
-                            <input type="password" id="llm-api-key" 
+                            <label for="llm-api-key" class="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                            <input type="password" id="llm-api-key"
                                    class="w-full border rounded-lg px-3 py-2"
                                    placeholder="sk-..."
                                    value="${state.data.llmApiKey}">
                         </div>
                         
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                            <label for="llm-model" class="block text-sm font-medium text-gray-700 mb-1">Model</label>
                             <select id="llm-model-select" class="w-full border rounded-lg px-3 py-2 mb-2">
                                 <option value="">Select a model or enter custom...</option>
                             </select>
@@ -383,6 +407,21 @@
                             Test Connection
                         </button>
                         <span id="test-result" class="ml-2"></span>
+
+                        <div class="mt-4 border-t pt-4">
+                            <label for="llm-include-body" class="flex items-start gap-2 text-sm text-gray-700 cursor-pointer">
+                                <input type="checkbox" id="llm-include-body" class="mt-1" ${state.data.includeBody ? 'checked' : ''}>
+                                <span>
+                                    <span class="font-medium">Also send the message body for classification</span>
+                                    <span class="block text-gray-500 mt-0.5">
+                                        Off by default — only the sender and subject are sent to the LLM, and the
+                                        body is never fetched from Gmail. Enable only if you're comfortable sending
+                                        message content (up to ~4,000 characters) to your provider. May improve
+                                        accuracy for hard-to-classify emails.
+                                    </span>
+                                </span>
+                            </label>
+                        </div>
                     </div>
                 </div>
             `,
@@ -423,6 +462,9 @@
                             <h3 class="font-semibold text-gray-900 mb-2">LLM Provider</h3>
                             <p class="text-gray-600">
                                 ${state.data.llmProvider || 'Not configured'} - ${state.data.llmModel || 'No model selected'}
+                            </p>
+                            <p class="text-gray-500 text-sm mt-1">
+                                Message body: ${state.data.includeBody ? 'included in classification' : 'not sent (sender + subject only)'}
                             </p>
                         </div>
                         
@@ -584,7 +626,14 @@
                 });
                 
                 document.getElementById('btn-test-llm').addEventListener('click', testLLMConnection);
-                
+
+                const includeBodyEl = document.getElementById('llm-include-body');
+                if (includeBodyEl) {
+                    includeBodyEl.addEventListener('change', (e) => {
+                        state.data.includeBody = e.target.checked;
+                    });
+                }
+
                 // Initialize hints and dropdown for current provider
                 if (state.data.llmProvider) {
                     modelHint.textContent = modelHints[state.data.llmProvider] || '';
@@ -674,19 +723,23 @@
 
         // OAuth flow
         async function startOAuthFlow() {
+            const btn = document.getElementById('btn-authorize');
+            if (btn) { btn.disabled = true; btn.textContent = 'Redirecting to Google…'; }
             try {
                 const response = await fetch('/setup/api/oauth/start');
                 const result = await response.json();
-                
+
                 if (!response.ok) {
                     showError(result.error || 'Failed to start OAuth flow');
+                    if (btn) { btn.disabled = false; btn.textContent = '🔐 Authorize with Google'; }
                     return;
                 }
-                
+
                 // Redirect to Google's authorization page
                 window.location.href = result.auth_url;
             } catch (err) {
                 showError('Failed to start OAuth: ' + err.message);
+                if (btn) { btn.disabled = false; btn.textContent = '🔐 Authorize with Google'; }
             }
         }
 
@@ -711,6 +764,11 @@
         // Test LLM connection
         async function testLLMConnection() {
             const resultEl = document.getElementById('test-result');
+            if (!state.data.llmProvider) { showError('Select a provider first'); return; }
+            if (!state.data.llmModel) { showError('Enter a model name first'); return; }
+            if (state.data.llmProvider !== 'ollama' && !state.data.llmApiKey) {
+                showError('Enter your API key first'); return;
+            }
             resultEl.textContent = 'Testing...';
             resultEl.className = 'ml-2 text-gray-600';
             
@@ -741,6 +799,25 @@
 
         // Navigation
         function setupNavigation() {
+            // Allow jumping back to an already-completed step via the progress dots
+            function navigateToStep(idx) {
+                if (!isNaN(idx) && state.completedSteps.includes(idx) && idx !== state.currentStep) {
+                    state.currentStep = idx;
+                    saveState();
+                    renderProgressSteps();
+                    renderCurrentPage();
+                }
+            }
+            elements.progressSteps.addEventListener('click', (e) => {
+                const el = e.target.closest('[data-step]');
+                if (el) navigateToStep(parseInt(el.dataset.step, 10));
+            });
+            elements.progressSteps.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                const el = e.target.closest('[data-step]');
+                if (el) { e.preventDefault(); navigateToStep(parseInt(el.dataset.step, 10)); }
+            });
+
             elements.btnBack.addEventListener('click', () => {
                 if (state.currentStep > 0) {
                     state.currentStep--;
@@ -911,6 +988,7 @@
         function showError(message) {
             elements.errorMessage.textContent = message;
             elements.errorAlert.classList.remove('hidden');
+            elements.errorAlert.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
         function hideError() {

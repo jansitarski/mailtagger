@@ -27,7 +27,7 @@ type Email struct {
 	ID      string // unique message identifier
 	From    string // sender address
 	Subject string // email subject
-	Body    string // email body (plain text)
+	Body    string // optional; left empty by the pipeline so message content is never sent to the LLM
 }
 
 // Decision represents the classification result for an email.
@@ -106,8 +106,13 @@ func (c *Classifier) Classify(ctx context.Context, email Email) (*Decision, erro
 		return nil, fmt.Errorf("render system prompt: %w", err)
 	}
 
-	// Build the user message with email content
-	userPrompt := fmt.Sprintf("From: %s\nSubject: %s\n\n%s", email.From, email.Subject, email.Body)
+	// Build the user message. The body is included only if explicitly provided;
+	// the pipeline deliberately omits it so private message content is never sent
+	// to the LLM (classification runs on sender + subject).
+	userPrompt := fmt.Sprintf("From: %s\nSubject: %s", email.From, email.Subject)
+	if email.Body != "" {
+		userPrompt += "\n\n" + email.Body
+	}
 
 	// Call the LLM with JSON mode
 	messages := []llms.MessageContent{

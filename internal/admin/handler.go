@@ -2,11 +2,13 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,21 +16,46 @@ import (
 	"github.com/jansitarski/mailtagger/internal/store"
 )
 
-// Handler serves the admin API endpoints.
-type Handler struct {
-	store     *store.Store
-	logger    *slog.Logger
-	startTime time.Time
-	dryRun    bool
+// Backfiller classifies pre-existing messages for an account on demand.
+// It is implemented by the pipeline; admin keeps it as an interface to avoid a
+// dependency on the pipeline package.
+type Backfiller interface {
+	BackfillAccount(ctx context.Context, account *store.Account, maxMessages int, onProgress func(handled, total int)) (int, error)
 }
 
-// NewHandler creates a new admin API handler.
-func NewHandler(st *store.Store, logger *slog.Logger, dryRun bool) *Handler {
+// backfillStatus is the JSON-serializable state of the (single) backfill job.
+type backfillStatus struct {
+	Running    bool       `json:"running"`
+	Account    string     `json:"account,omitempty"`
+	Requested  int        `json:"requested,omitempty"`
+	Handled    int        `json:"handled"`
+	Total      int        `json:"total"`
+	StartedAt  *time.Time `json:"started_at,omitempty"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Error      string     `json:"error,omitempty"`
+}
+
+// Handler serves the admin API endpoints.
+type Handler struct {
+	store      *store.Store
+	logger     *slog.Logger
+	startTime  time.Time
+	dryRun     bool
+	backfiller Backfiller
+
+	backfillMu sync.Mutex
+	backfill   backfillStatus
+}
+
+// NewHandler creates a new admin API handler. backfiller may be nil (the
+// "classify previous emails" action is then unavailable).
+func NewHandler(st *store.Store, logger *slog.Logger, dryRun bool, backfiller Backfiller) *Handler {
 	return &Handler{
-		store:     st,
-		logger:    logger,
-		startTime: time.Now(),
-		dryRun:    dryRun,
+		store:      st,
+		logger:     logger,
+		startTime:  time.Now(),
+		dryRun:     dryRun,
+		backfiller: backfiller,
 	}
 }
 
@@ -38,6 +65,23 @@ func (h *Handler) Routes(r chi.Router) {
 	r.Get("/accounts", h.handleAccounts)
 	r.Get("/history", h.handleHistory)
 	r.Post("/reset-cursor", h.handleResetCursor)
+	r.Post("/classify-previous", h.handleClassifyPrevious)
+	r.Get("/classify-previous/status", h.handleClassifyPreviousStatus)
+}
+
+// resolveAccount looks up an account by email address or numeric ID.
+func (h *Handler) resolveAccount(identifier string) (*store.Account, error) {
+	account, err := h.store.GetAccountByEmail(identifier)
+	if err == nil {
+		return account, nil
+	}
+	if err == store.ErrAccountNotFound {
+		var id int64
+		if _, perr := fmt.Sscanf(identifier, "%d", &id); perr == nil {
+			return h.store.GetAccount(id)
+		}
+	}
+	return nil, err
 }
 
 // statusResponse is the JSON response for GET /admin/api/status.
@@ -216,6 +260,106 @@ func (h *Handler) handleResetCursor(w http.ResponseWriter, r *http.Request) {
 		"account":          account.Email,
 		"messages_cleared": clearedCount,
 	})
+}
+
+// classifyPreviousRequest is the JSON body for POST /admin/api/classify-previous.
+type classifyPreviousRequest struct {
+	Account     string `json:"account"`      // email address or numeric ID
+	MaxMessages int    `json:"max_messages"` // most-recent messages to scan (default 50, max 500)
+}
+
+// handleClassifyPrevious starts a background job that classifies the account's
+// most recent existing emails. Only one job runs at a time.
+func (h *Handler) handleClassifyPrevious(w http.ResponseWriter, r *http.Request) {
+	if h.backfiller == nil {
+		h.respondError(w, http.StatusServiceUnavailable, "classification is not available")
+		return
+	}
+
+	var req classifyPreviousRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Account == "" {
+		h.respondError(w, http.StatusBadRequest, "account field is required")
+		return
+	}
+	if req.MaxMessages <= 0 {
+		req.MaxMessages = 50
+	}
+	if req.MaxMessages > 500 {
+		req.MaxMessages = 500
+	}
+
+	account, err := h.resolveAccount(req.Account)
+	if err != nil {
+		if err == store.ErrAccountNotFound {
+			h.respondError(w, http.StatusNotFound, "account not found: "+req.Account)
+			return
+		}
+		h.respondError(w, http.StatusInternalServerError, "failed to find account: "+err.Error())
+		return
+	}
+
+	h.backfillMu.Lock()
+	if h.backfill.Running {
+		h.backfillMu.Unlock()
+		h.respondError(w, http.StatusConflict, "a classification run is already in progress")
+		return
+	}
+	started := time.Now()
+	h.backfill = backfillStatus{
+		Running:   true,
+		Account:   account.Email,
+		Requested: req.MaxMessages,
+		StartedAt: &started,
+	}
+	h.backfillMu.Unlock()
+
+	go h.runBackfill(account, req.MaxMessages)
+
+	h.logger.Info("admin: classify previous emails started", "account", account.Email, "max_messages", req.MaxMessages)
+	h.respondJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status":       "started",
+		"account":      account.Email,
+		"max_messages": req.MaxMessages,
+	})
+}
+
+// runBackfill executes the backfill in the background and records its status.
+func (h *Handler) runBackfill(account *store.Account, maxMessages int) {
+	// Use a detached context so the job outlives the triggering HTTP request,
+	// with a generous cap so it can never run indefinitely.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	handled, err := h.backfiller.BackfillAccount(ctx, account, maxMessages, func(handled, total int) {
+		h.backfillMu.Lock()
+		h.backfill.Handled = handled
+		h.backfill.Total = total
+		h.backfillMu.Unlock()
+	})
+
+	finished := time.Now()
+	h.backfillMu.Lock()
+	h.backfill.Running = false
+	h.backfill.Handled = handled
+	h.backfill.FinishedAt = &finished
+	if err != nil && err != context.Canceled {
+		h.backfill.Error = err.Error()
+	}
+	h.backfillMu.Unlock()
+
+	h.logger.Info("admin: classify previous emails finished", "account", account.Email, "handled", handled, "error", err)
+}
+
+// handleClassifyPreviousStatus returns the current/last backfill job status.
+func (h *Handler) handleClassifyPreviousStatus(w http.ResponseWriter, r *http.Request) {
+	h.backfillMu.Lock()
+	status := h.backfill
+	h.backfillMu.Unlock()
+	h.respondJSON(w, http.StatusOK, status)
 }
 
 func (h *Handler) respondJSON(w http.ResponseWriter, code int, data interface{}) {

@@ -453,6 +453,7 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 		LLMProvider  string          `json:"llmProvider"`
 		LLMAPIKey    string          `json:"llmApiKey"`
 		LLMModel     string          `json:"llmModel"`
+		IncludeBody  bool            `json:"includeBody"`
 		Categories   []struct {
 			Name        string `json:"name"`
 			Label       string `json:"label"`
@@ -521,6 +522,7 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 			APIKey:   req.LLMAPIKey,
 		},
 		PollInterval:     "5m",
+		IncludeBody:      req.IncludeBody,
 		ClientSecretPath: clientSecretPath,
 		EncryptionKey:    encKeyHex,
 		Store: config.StoreConfig{
@@ -558,7 +560,7 @@ func (h *APIHandler) handleComplete(w http.ResponseWriter, r *http.Request) {
 		h.respondError(w, http.StatusInternalServerError, "failed to save config.yaml: "+err.Error())
 		return
 	}
-	h.logger.Info("saved config.yaml", "path", configPath, "encryption_key", encKeyHex)
+	h.logger.Info("saved config.yaml", "path", configPath)
 
 	h.logger.Info("setup complete",
 		"provider", req.LLMProvider,

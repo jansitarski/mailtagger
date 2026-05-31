@@ -27,6 +27,10 @@ const DefaultMaxMessagesPerTick = 50
 // RateLimitPause is the duration to wait when a rate limit error is detected.
 const RateLimitPause = 5 * time.Minute
 
+// DefaultMaxBodyChars is the maximum number of message-body characters sent to
+// the LLM when body classification is opted in via the include_body config option.
+const DefaultMaxBodyChars = 4000
+
 // GmailClientFactory creates Gmail clients for accounts.
 type GmailClientFactory interface {
 	// NewClient creates a Gmail client for the given account.
@@ -116,7 +120,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 	}
 
-	p.logger.Info("pipeline starting", "poll_interval", pollInterval, "dry_run", p.dryRun)
+	p.logger.Info("pipeline starting", "poll_interval", pollInterval.String(), "dry_run", p.dryRun)
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -190,7 +194,9 @@ func (p *Pipeline) tick(ctx context.Context) error {
 	// Record tick messages processed
 	metrics.TickMessagesProcessed.WithLabelValues().Observe(float64(totalProcessed))
 
-	p.logger.Debug("tick completed", "latency_ms", time.Since(tickStart).Milliseconds(), "messages_processed", totalProcessed)
+	// Heartbeat at Info so the operator can see the pipeline is alive and polling,
+	// even when a poll finds no new mail. Per-message details are logged separately.
+	p.logger.Info("poll complete", "accounts", len(accounts), "messages_processed", totalProcessed, "latency_ms", time.Since(tickStart).Milliseconds())
 
 	return nil
 }
@@ -298,6 +304,75 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) (
 	return processed, nil
 }
 
+// BackfillAccount classifies up to maxMessages of the most recent existing
+// messages for the account (newest first), running each through the normal
+// classify → label → record path. Messages already processed (or already
+// carrying an AI/* label) are skipped, and dry-run mode is honored. Unlike the
+// tick loop, it does NOT advance the history cursor — it only classifies
+// pre-existing mail on demand (admin "classify previous emails" action).
+//
+// onProgress, if non-nil, is called with (handled, total) once the candidate
+// list is known and after each message, so callers can report live progress.
+func (p *Pipeline) BackfillAccount(ctx context.Context, account *store.Account, maxMessages int, onProgress func(handled, total int)) (int, error) {
+	if maxMessages <= 0 {
+		maxMessages = DefaultMaxMessagesPerTick
+	}
+
+	logger := p.logger.With("account_id", account.ID, "account_email", account.Email, "backfill", true)
+
+	client, err := p.gmailFactory.NewClient(ctx, account)
+	if err != nil {
+		return 0, err
+	}
+
+	messageIDs, err := client.ListRecentMessageIDs(ctx, maxMessages)
+	if err != nil {
+		return 0, err
+	}
+
+	total := len(messageIDs)
+	logger.Info("backfill starting", "candidate_messages", total, "dry_run", p.dryRun)
+	if onProgress != nil {
+		onProgress(0, total)
+	}
+
+	handled := 0
+	for _, msgID := range messageIDs {
+		select {
+		case <-ctx.Done():
+			logger.Info("backfill cancelled", "handled", handled)
+			return handled, ctx.Err()
+		default:
+		}
+
+		if err := p.processMessage(ctx, client, account, msgID); err != nil {
+			if isRateLimitError(err) {
+				logger.Warn("rate limited during backfill, pausing before retry", "pause", RateLimitPause)
+				select {
+				case <-time.After(RateLimitPause):
+					if retryErr := p.processMessage(ctx, client, account, msgID); retryErr != nil {
+						logger.Error("backfill message failed after rate limit pause", "message_id", msgID, "error", retryErr)
+						continue
+					}
+				case <-ctx.Done():
+					return handled, ctx.Err()
+				}
+			} else {
+				logger.Error("backfill message failed", "message_id", msgID, "error", err)
+				continue
+			}
+		}
+
+		handled++
+		if onProgress != nil {
+			onProgress(handled, total)
+		}
+	}
+
+	logger.Info("backfill complete", "handled", handled, "candidates", total)
+	return handled, nil
+}
+
 // fetchNewMessageIDs fetches new message IDs for an account using history sync.
 // If no history ID exists, it bootstraps by getting the current history ID.
 func (p *Pipeline) fetchNewMessageIDs(ctx context.Context, client *gmail.Client, account *store.Account) ([]string, string, error) {
@@ -340,29 +415,34 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 		return nil
 	}
 
-	// 1. Fetch the full message
-	msg, err := client.GetMessage(ctx, messageID)
+	// 1. Fetch the message. By default we fetch metadata only (headers + labels;
+	// the body is never retrieved). If the operator has opted in via include_body,
+	// fetch the full message so we can include a trimmed body in classification.
+	var msg *gmail.Message
+	if p.config.IncludeBody {
+		msg, err = client.GetMessageWithBody(ctx, messageID)
+	} else {
+		msg, err = client.GetMessage(ctx, messageID)
+	}
 	if err != nil {
 		return err
 	}
 
-	// 2. Extract the body for classification
-	body, err := gmail.ExtractBody(msg.RawMessage)
-	if err != nil {
-		// Use snippet as fallback
-		body = msg.Snippet
-	}
-
-	// Clean the body (strip quoted replies, truncate)
-	body = gmail.CleanBody(body, 4000) // 4k chars max for LLM
-
-	// 3. Classify the email
+	// 2. Build the classification input. Sender and subject are always used; the
+	// message body is included only when include_body is enabled, since it may
+	// contain private content.
 	classifyStart := time.Now()
 	email := classifier.Email{
 		ID:      messageID,
 		From:    msg.From,
 		Subject: msg.Subject,
-		Body:    body,
+	}
+	if p.config.IncludeBody {
+		body, extractErr := gmail.ExtractBody(msg.RawMessage)
+		if extractErr != nil {
+			body = msg.Snippet
+		}
+		email.Body = gmail.CleanBody(body, DefaultMaxBodyChars)
 	}
 
 	decision, err := p.classifier.Classify(ctx, email)

@@ -280,6 +280,49 @@ func TestStore_Crypto(t *testing.T) {
 	}
 }
 
+func TestStore_ListAccountStats(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+
+	acc, err := store.InsertAccount("a@example.com", []byte("token"))
+	if err != nil {
+		t.Fatalf("insert account: %v", err)
+	}
+
+	// Account with no processed messages: count 0, no last-processed time.
+	stats, err := store.ListAccountStats()
+	if err != nil {
+		t.Fatalf("ListAccountStats (empty): %v", err)
+	}
+	if len(stats) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(stats))
+	}
+	if stats[0].ProcessedCount != 0 {
+		t.Errorf("expected processed_count 0, got %d", stats[0].ProcessedCount)
+	}
+	if stats[0].LastProcessedAt != nil {
+		t.Errorf("expected nil LastProcessedAt, got %v", stats[0].LastProcessedAt)
+	}
+
+	// After processing messages: count and a non-nil last-processed time. This
+	// exercises scanning MAX(processed_at), which previously failed to scan.
+	for _, id := range []string{"m1", "m2"} {
+		if err := store.InsertProcessedMessage(acc.ID, id); err != nil {
+			t.Fatalf("insert processed message: %v", err)
+		}
+	}
+	stats, err = store.ListAccountStats()
+	if err != nil {
+		t.Fatalf("ListAccountStats (with messages): %v", err)
+	}
+	if stats[0].ProcessedCount != 2 {
+		t.Errorf("expected processed_count 2, got %d", stats[0].ProcessedCount)
+	}
+	if stats[0].LastProcessedAt == nil {
+		t.Error("expected non-nil LastProcessedAt after processing messages")
+	}
+}
+
 func TestStore_GCLoop(t *testing.T) {
 	// Create store with short retention for testing
 	store, err := Open(":memory:", 1)

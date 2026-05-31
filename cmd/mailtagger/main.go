@@ -109,7 +109,7 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 		if err != nil {
 			return err
 		}
-		slog.Info("using encryption key from flag/env", "key_hex", hex.EncodeToString(encryptionKey))
+		slog.Debug("using encryption key from flag/env")
 	}
 
 	// Open the store
@@ -143,7 +143,7 @@ func runServe(ctx context.Context, configPath, addrOverride, clientSecretPath, e
 			if err != nil {
 				return fmt.Errorf("invalid encryption_key in config: %w", err)
 			}
-			slog.Info("using encryption key from config", "key_hex", cfg.EncryptionKey)
+			slog.Debug("using encryption key from config")
 		} else {
 			return fmt.Errorf("encryption key required: use --encryption-key flag, MAILTAGGER_ENCRYPTION_KEY env var, or encryption_key in config")
 		}
@@ -174,7 +174,7 @@ func runSetupMode(ctx context.Context, cfg *config.Config, configPath, addrOverr
 			slog.Warn("invalid encryption key in config, generating new one", "error", err)
 			encKeyBytes = nil
 		} else {
-			slog.Info("using encryption key from config", "key_hex", cfg.EncryptionKey)
+			slog.Debug("using encryption key from config")
 		}
 	}
 	if encKeyBytes == nil {
@@ -182,8 +182,7 @@ func runSetupMode(ctx context.Context, cfg *config.Config, configPath, addrOverr
 		if _, err := rand.Read(encKeyBytes); err != nil {
 			return fmt.Errorf("failed to generate encryption key: %w", err)
 		}
-		slog.Info("generated encryption key for setup session",
-			"key_hex", hex.EncodeToString(encKeyBytes))
+		slog.Info("generated encryption key for setup session (saved to config on completion)")
 	}
 
 	// Generate setup token
@@ -356,10 +355,10 @@ func runNormalMode(ctx context.Context, cfg *config.Config, addrOverride, client
 		http.Error(w, `{"error":"oauth not configured"}`, http.StatusServiceUnavailable)
 	})
 
-	// Register /admin routes (enabled by default unless explicitly disabled)
-	adminEnabled := true
-	if cfg.Admin.Password != "" || adminEnabled {
-		adminHandler := admin.NewHandler(st, logger, dryRun)
+	// Register /admin routes (enabled by default unless explicitly disabled via admin.enabled: false)
+	adminEnabled := cfg.Admin.Enabled == nil || *cfg.Admin.Enabled
+	if adminEnabled {
+		adminHandler := admin.NewHandler(st, logger, dryRun, p)
 		srv.Router().Route("/admin", func(r chi.Router) {
 			// Add basic auth if password is configured
 			if cfg.Admin.Password != "" {
@@ -930,6 +929,11 @@ func runSetup(dbPath, configPath, clientSecretPath string) error {
 					Label:       "AI/personal",
 					Description: "Personal correspondence from individuals, family, or friends.",
 				},
+				{
+					Name:        "Others",
+					Label:       "AI/others",
+					Description: "Emails that do not fit any other category (required fallback).",
+				},
 			},
 		}
 	}
@@ -994,6 +998,7 @@ func marshalConfig(cfg *config.Config) ([]byte, error) {
 	type yamlConfig struct {
 		LLM              config.LLMConfig   `yaml:"llm"`
 		PollInterval     string             `yaml:"poll_interval"`
+		IncludeBody      bool               `yaml:"include_body"`
 		Store            config.StoreConfig  `yaml:"store"`
 		HTTP             config.HTTPConfig   `yaml:"http"`
 		Log              config.LogConfig    `yaml:"log"`
@@ -1005,6 +1010,7 @@ func marshalConfig(cfg *config.Config) ([]byte, error) {
 	out := yamlConfig{
 		LLM:              cfg.LLM,
 		PollInterval:     cfg.PollInterval,
+		IncludeBody:      cfg.IncludeBody,
 		Store:            cfg.Store,
 		HTTP:             cfg.HTTP,
 		Log:              cfg.Log,

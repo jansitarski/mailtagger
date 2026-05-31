@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// fallbackCategoryName is the category the classifier falls back to for messages
+// that don't match any configured category. It must match classifier.FallbackCategory;
+// it is duplicated here rather than imported to avoid an import cycle (the classifier
+// package imports config).
+const fallbackCategoryName = "Others"
+
 // Validate checks the configuration for required fields and valid values.
 func (c *Config) Validate() error {
 	// Validate LLM config
@@ -38,10 +44,21 @@ func (c *Config) Validate() error {
 	if len(c.Categories) == 0 {
 		return fmt.Errorf("at least one category must be configured")
 	}
+	hasFallback := false
 	for i, cat := range c.Categories {
 		if err := cat.validate(); err != nil {
 			return fmt.Errorf("category[%d] (%s): %w", i, cat.Name, err)
 		}
+		if cat.Name == fallbackCategoryName {
+			hasFallback = true
+		}
+	}
+
+	// The classifier requires a fallback category named "Others" for messages that
+	// don't match any other category; reject configs that omit it so we fail fast
+	// here rather than later when the classifier is constructed.
+	if !hasFallback {
+		return fmt.Errorf("a category named %q is required as the classification fallback", fallbackCategoryName)
 	}
 
 	return nil

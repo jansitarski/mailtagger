@@ -2,9 +2,12 @@ package gmail
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	"google.golang.org/api/gmail/v1"
+	"google.golang.org/api/googleapi"
 )
 
 // LabelCache defines the interface for caching Gmail labels.
@@ -102,6 +105,17 @@ func (lm *LabelManager) CreateLabel(ctx context.Context, labelName string) (stri
 	})
 
 	if err != nil {
+		// If the label already exists in Gmail (409 conflict), it simply isn't in
+		// our local cache yet. Reconcile from Gmail and return the existing ID
+		// rather than failing.
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) && apiErr.Code == http.StatusConflict {
+			if syncErr := lm.SyncLabels(ctx); syncErr == nil {
+				if id, lookupErr := lm.cache.GetLabel(lm.accountID, labelName); lookupErr == nil {
+					return id, nil
+				}
+			}
+		}
 		return "", fmt.Errorf("failed to create label %s: %w", labelName, err)
 	}
 
@@ -116,12 +130,21 @@ func (lm *LabelManager) CreateLabel(ctx context.Context, labelName string) (stri
 // GetOrCreateLabel retrieves a label ID by name, creating it if it doesn't exist.
 // This implements lazy label creation.
 func (lm *LabelManager) GetOrCreateLabel(ctx context.Context, labelName string) (string, error) {
-	// Try to get from cache first
-	labelID, err := lm.GetLabelID(ctx, labelName)
-	if err == nil {
+	// Fast path: use the cached name -> ID mapping.
+	if labelID, err := lm.cache.GetLabel(lm.accountID, labelName); err == nil {
 		return labelID, nil
 	}
 
-	// Label not in cache, try to create it
+	// Cache miss. The label may already exist in Gmail (created by a previous
+	// run, or the local cache/DB was reset). Reconcile the cache from Gmail
+	// before creating, so we don't hit 409 "label already exists" errors.
+	if err := lm.SyncLabels(ctx); err != nil {
+		return "", fmt.Errorf("failed to sync labels: %w", err)
+	}
+	if labelID, err := lm.cache.GetLabel(lm.accountID, labelName); err == nil {
+		return labelID, nil
+	}
+
+	// Genuinely new label — create it.
 	return lm.CreateLabel(ctx, labelName)
 }

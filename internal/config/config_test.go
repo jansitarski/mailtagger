@@ -31,6 +31,9 @@ categories:
   - name: newsletter
     label: automated/newsletter
     description: Marketing emails and newsletters
+  - name: Others
+    label: automated/others
+    description: Fallback category
 `
 
 	tmpDir := t.TempDir()
@@ -56,8 +59,8 @@ categories:
 		t.Errorf("Expected poll_interval '5m', got %q", cfg.PollInterval)
 	}
 
-	if len(cfg.Categories) != 1 {
-		t.Errorf("Expected 1 category, got %d", len(cfg.Categories))
+	if len(cfg.Categories) != 2 {
+		t.Errorf("Expected 2 categories, got %d", len(cfg.Categories))
 	}
 }
 
@@ -91,6 +94,9 @@ categories:
   - name: newsletter
     label: automated/newsletter
     description: Marketing emails
+  - name: Others
+    label: automated/others
+    description: Fallback category
 `
 
 	tmpDir := t.TempDir()
@@ -136,6 +142,9 @@ categories:
   - name: newsletter
     label: automated/newsletter
     description: Marketing emails
+  - name: Others
+    label: automated/others
+    description: Fallback category
 `
 
 	tmpDir := t.TempDir()
@@ -181,6 +190,11 @@ func TestValidate_ValidConfig(t *testing.T) {
 				Label:       "automated/newsletter",
 				Description: "Marketing emails",
 			},
+			{
+				Name:        "Others",
+				Label:       "automated/others",
+				Description: "Fallback category",
+			},
 		},
 	}
 
@@ -207,6 +221,11 @@ func TestValidate_MissingProvider(t *testing.T) {
 				Name:        "newsletter",
 				Label:       "automated/newsletter",
 				Description: "Marketing emails",
+			},
+			{
+				Name:        "Others",
+				Label:       "automated/others",
+				Description: "Fallback category",
 			},
 		},
 	}
@@ -237,6 +256,11 @@ func TestValidate_InvalidProvider(t *testing.T) {
 				Label:       "automated/newsletter",
 				Description: "Marketing emails",
 			},
+			{
+				Name:        "Others",
+				Label:       "automated/others",
+				Description: "Fallback category",
+			},
 		},
 	}
 
@@ -266,6 +290,11 @@ func TestValidate_InvalidTemperature(t *testing.T) {
 				Name:        "newsletter",
 				Label:       "automated/newsletter",
 				Description: "Marketing emails",
+			},
+			{
+				Name:        "Others",
+				Label:       "automated/others",
+				Description: "Fallback category",
 			},
 		},
 	}
@@ -320,6 +349,11 @@ func TestValidate_InvalidDuration(t *testing.T) {
 				Label:       "automated/newsletter",
 				Description: "Marketing emails",
 			},
+			{
+				Name:        "Others",
+				Label:       "automated/others",
+				Description: "Fallback category",
+			},
 		},
 	}
 
@@ -350,6 +384,11 @@ func TestValidate_InvalidPollInterval(t *testing.T) {
 				Label:       "automated/newsletter",
 				Description: "Marketing emails",
 			},
+			{
+				Name:        "Others",
+				Label:       "automated/others",
+				Description: "Fallback category",
+			},
 		},
 	}
 
@@ -379,6 +418,11 @@ func TestValidate_OllamaNoAPIKey(t *testing.T) {
 				Name:        "newsletter",
 				Label:       "automated/newsletter",
 				Description: "Marketing emails",
+			},
+			{
+				Name:        "Others",
+				Label:       "automated/others",
+				Description: "Fallback category",
 			},
 		},
 	}

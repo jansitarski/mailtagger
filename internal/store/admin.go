@@ -1,9 +1,27 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 )
+
+// parseSQLiteTime parses a SQLite datetime string into a time.Time. Aggregate
+// results such as MAX(processed_at) lose the column's datetime affinity, so the
+// driver returns them as a plain string rather than converting to time.Time.
+func parseSQLiteTime(s string) (time.Time, bool) {
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05",
+		time.RFC3339Nano,
+		time.RFC3339,
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
 
 // AccountStats contains account info plus aggregated statistics.
 type AccountStats struct {
@@ -61,11 +79,19 @@ func (s *Store) ListAccountStats() ([]AccountStats, error) {
 	var stats []AccountStats
 	for rows.Next() {
 		var s AccountStats
+		// last_processed is MAX(processed_at); scan as a nullable string since the
+		// aggregate loses datetime affinity, then parse into time.Time.
+		var lastProcessed sql.NullString
 		if err := rows.Scan(
 			&s.ID, &s.Email, &s.HistoryID, &s.CreatedAt, &s.UpdatedAt,
-			&s.ProcessedCount, &s.LastProcessedAt,
+			&s.ProcessedCount, &lastProcessed,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan account stats: %w", err)
+		}
+		if lastProcessed.Valid {
+			if t, ok := parseSQLiteTime(lastProcessed.String); ok {
+				s.LastProcessedAt = &t
+			}
 		}
 		stats = append(stats, s)
 	}
