@@ -40,7 +40,10 @@
                 <h1 class="text-2xl font-bold text-white">mailtagger</h1>
                 <p class="text-sm text-slate-400">admin dashboard</p>
             </div>
-            <div id="status-badge" class="badge badge-green">loading...</div>
+            <div class="text-right">
+                <div id="status-badge" class="badge badge-green" aria-live="polite">loading...</div>
+                <p id="last-updated" class="text-xs text-slate-500 mt-1"></p>
+            </div>
         </header>
 
         <!-- Tabs -->
@@ -107,7 +110,7 @@
                 <div class="flex items-center justify-between mb-4">
                     <h2 class="text-lg font-semibold text-white">Classification History</h2>
                     <div class="flex items-center gap-2">
-                        <select id="history-account-filter" onchange="loadHistory()" class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200">
+                        <select id="history-account-filter" onchange="onHistoryFilterChange()" class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-slate-200">
                             <option value="">All Accounts</option>
                         </select>
                         <button onclick="loadHistory()" class="btn btn-blue">Refresh</button>
@@ -237,9 +240,13 @@
             accounts = accountsResp.accounts || [];
             renderAccountsTable(accounts);
             populateAccountSelects(accounts);
+
+            document.getElementById('last-updated').textContent = 'updated ' + new Date().toLocaleTimeString();
         } catch (err) {
             document.getElementById('status-badge').textContent = 'ERROR';
             document.getElementById('status-badge').className = 'badge badge-yellow';
+            document.getElementById('accounts-table-body').innerHTML =
+                '<tr><td colspan="4" class="py-4 text-red-400">Failed to load — retrying shortly…</td></tr>';
             console.error('Failed to load dashboard:', err);
         }
     }
@@ -279,6 +286,12 @@
     }
 
     // History
+    function onHistoryFilterChange() {
+        // Reset to the first page when the account filter changes.
+        historyOffset = 0;
+        loadHistory();
+    }
+
     async function loadHistory() {
         const accountFilter = document.getElementById('history-account-filter').value;
         let url = `/history?limit=${historyLimit}&offset=${historyOffset}`;
@@ -290,6 +303,8 @@
             renderHistoryTable(data.messages);
             updateHistoryPagination();
         } catch (err) {
+            document.getElementById('history-table-body').innerHTML =
+                '<tr><td colspan="3" class="py-4 text-red-400">Failed to load history.</td></tr>';
             console.error('Failed to load history:', err);
         }
     }
@@ -334,6 +349,16 @@
         const select = document.getElementById('reset-account-select');
         const account = select.value === 'all' ? 'all' : accounts.find(a => a.id == select.value)?.email || select.value;
         const clearProcessed = document.getElementById('reset-clear-processed').checked;
+
+        // Confirm before this destructive, hard-to-undo action.
+        const scope = account === 'all' ? 'ALL accounts' : account;
+        let confirmMsg = `Reset the Gmail history cursor for ${scope}?\n\n` +
+            `The pipeline will re-bootstrap from the current Gmail history on the next poll cycle.`;
+        if (clearProcessed) {
+            confirmMsg += `\n\nThis will ALSO delete processed-message records, so already-labeled ` +
+                `messages may be re-classified and re-labeled.`;
+        }
+        if (!window.confirm(confirmMsg)) return;
 
         const resultEl = document.getElementById('reset-result');
         resultEl.classList.remove('hidden');
