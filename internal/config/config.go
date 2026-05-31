@@ -4,15 +4,16 @@ import "time"
 
 // Config is the top-level configuration structure for mailtagger.
 type Config struct {
-	LLM              LLMConfig   `yaml:"llm"`
-	Store            StoreConfig `yaml:"store"`
-	HTTP             HTTPConfig  `yaml:"http"`
-	Log              LogConfig   `yaml:"log"`
-	Categories       []Category  `yaml:"categories"`
-	PollInterval     string      `yaml:"poll_interval"`         // e.g., "5m", parsed as time.Duration
-	MaxMessagesPerTick *int      `yaml:"max_messages_per_tick"` // max messages to process per tick (nil = use default, 0 = unlimited)
-	ClientSecretPath string      `yaml:"client_secret_path"`    // path to OAuth client_secret.json file
-	EncryptionKey    string      `yaml:"encryption_key"`        // 32-byte encryption key in hex (or use MAILTAGGER_ENCRYPTION_KEY env var)
+	LLM              LLMConfig    `yaml:"llm"`
+	Store            StoreConfig  `yaml:"store"`
+	HTTP             HTTPConfig   `yaml:"http"`
+	Log              LogConfig    `yaml:"log"`
+	Admin            AdminConfig  `yaml:"admin"`
+	Categories       []Category   `yaml:"categories"`
+	PollInterval     string       `yaml:"poll_interval"`         // e.g., "5m", parsed as time.Duration
+	MaxMessagesPerTick *int       `yaml:"max_messages_per_tick"` // max messages to process per tick (nil = use default, 0 = unlimited)
+	ClientSecretPath string       `yaml:"client_secret_path"`    // path to OAuth client_secret.json file
+	EncryptionKey    string       `yaml:"encryption_key"`        // 32-byte encryption key in hex (or use MAILTAGGER_ENCRYPTION_KEY env var)
 }
 
 // LLMConfig defines the LLM provider configuration.
@@ -45,6 +46,12 @@ type HTTPConfig struct {
 type LogConfig struct {
 	Level  string `yaml:"level"`  // "debug", "info", "warn", "error" (default: "info")
 	Format string `yaml:"format"` // "json" or "text" (default: "json")
+}
+
+// AdminConfig defines admin dashboard settings.
+type AdminConfig struct {
+	Enabled  bool   `yaml:"enabled"`  // enable admin dashboard at /admin (default: true if not set)
+	Password string `yaml:"password"` // optional basic auth password (username is always "admin")
 }
 
 // Category defines a classification category and its Gmail label.
