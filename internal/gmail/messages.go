@@ -128,6 +128,41 @@ func (c *Client) GetMessages(ctx context.Context, messageIDs []string) (map[stri
 	return messages, nil
 }
 
+// ListRecentMessageIDs returns up to maxResults of the most recent message IDs
+// in the mailbox (newest first). It is used for on-demand classification of
+// existing messages (admin backfill), not for the normal history-sync path.
+// Uses rate limiting and automatic retry on 429/5xx errors.
+func (c *Client) ListRecentMessageIDs(ctx context.Context, maxResults int) ([]string, error) {
+	if maxResults <= 0 {
+		return nil, nil
+	}
+	// Gmail caps a single page at 500 results.
+	if maxResults > 500 {
+		maxResults = 500
+	}
+
+	var resp *gmail.ListMessagesResponse
+	err := c.rateLimiter.DoWithOp(ctx, "messages.list", func() error {
+		var apiErr error
+		resp, apiErr = c.service.Users.Messages.List("me").
+			Context(ctx).
+			MaxResults(int64(maxResults)).
+			Do()
+		return apiErr
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list messages: %w", err)
+	}
+
+	ids := make([]string, 0, len(resp.Messages))
+	for _, m := range resp.Messages {
+		if m.Id != "" {
+			ids = append(ids, m.Id)
+		}
+	}
+	return ids, nil
+}
+
 // AddLabels adds one or more labels to a message.
 // Returns the updated message with new label IDs.
 // Uses rate limiting and automatic retry on 429/5xx errors.

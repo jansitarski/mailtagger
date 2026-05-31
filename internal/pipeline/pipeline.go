@@ -302,6 +302,75 @@ func (p *Pipeline) processAccount(ctx context.Context, account *store.Account) (
 	return processed, nil
 }
 
+// BackfillAccount classifies up to maxMessages of the most recent existing
+// messages for the account (newest first), running each through the normal
+// classify → label → record path. Messages already processed (or already
+// carrying an AI/* label) are skipped, and dry-run mode is honored. Unlike the
+// tick loop, it does NOT advance the history cursor — it only classifies
+// pre-existing mail on demand (admin "classify previous emails" action).
+//
+// onProgress, if non-nil, is called with (handled, total) once the candidate
+// list is known and after each message, so callers can report live progress.
+func (p *Pipeline) BackfillAccount(ctx context.Context, account *store.Account, maxMessages int, onProgress func(handled, total int)) (int, error) {
+	if maxMessages <= 0 {
+		maxMessages = DefaultMaxMessagesPerTick
+	}
+
+	logger := p.logger.With("account_id", account.ID, "account_email", account.Email, "backfill", true)
+
+	client, err := p.gmailFactory.NewClient(ctx, account)
+	if err != nil {
+		return 0, err
+	}
+
+	messageIDs, err := client.ListRecentMessageIDs(ctx, maxMessages)
+	if err != nil {
+		return 0, err
+	}
+
+	total := len(messageIDs)
+	logger.Info("backfill starting", "candidate_messages", total, "dry_run", p.dryRun)
+	if onProgress != nil {
+		onProgress(0, total)
+	}
+
+	handled := 0
+	for _, msgID := range messageIDs {
+		select {
+		case <-ctx.Done():
+			logger.Info("backfill cancelled", "handled", handled)
+			return handled, ctx.Err()
+		default:
+		}
+
+		if err := p.processMessage(ctx, client, account, msgID); err != nil {
+			if isRateLimitError(err) {
+				logger.Warn("rate limited during backfill, pausing before retry", "pause", RateLimitPause)
+				select {
+				case <-time.After(RateLimitPause):
+					if retryErr := p.processMessage(ctx, client, account, msgID); retryErr != nil {
+						logger.Error("backfill message failed after rate limit pause", "message_id", msgID, "error", retryErr)
+						continue
+					}
+				case <-ctx.Done():
+					return handled, ctx.Err()
+				}
+			} else {
+				logger.Error("backfill message failed", "message_id", msgID, "error", err)
+				continue
+			}
+		}
+
+		handled++
+		if onProgress != nil {
+			onProgress(handled, total)
+		}
+	}
+
+	logger.Info("backfill complete", "handled", handled, "candidates", total)
+	return handled, nil
+}
+
 // fetchNewMessageIDs fetches new message IDs for an account using history sync.
 // If no history ID exists, it bootstraps by getting the current history ID.
 func (p *Pipeline) fetchNewMessageIDs(ctx context.Context, client *gmail.Client, account *store.Account) ([]string, string, error) {

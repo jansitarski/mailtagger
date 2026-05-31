@@ -162,6 +162,27 @@
                 <div id="reset-result" class="mt-3 text-sm hidden"></div>
             </div>
 
+            <div class="card mb-4">
+                <h2 class="text-lg font-semibold text-white mb-4">Classify Previous Emails</h2>
+                <p class="text-sm text-slate-400 mb-4">
+                    Fetch the account's most recent existing emails and run them through the classifier.
+                    Messages already processed (or already labeled by mailtagger) are skipped, and this does
+                    not move the history cursor.
+                </p>
+                <div class="flex items-center gap-3 mb-3">
+                    <select id="classify-account-select" class="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-slate-200 flex-1">
+                        <option value="">Select an account…</option>
+                    </select>
+                    <label class="flex items-center gap-2 text-sm text-slate-300">
+                        Max
+                        <input type="number" id="classify-max" value="50" min="1" max="500"
+                               class="bg-slate-800 border border-slate-600 rounded px-2 py-2 text-sm text-slate-200 w-20">
+                    </label>
+                </div>
+                <button id="classify-btn" onclick="classifyPrevious()" class="btn btn-blue">Classify Previous Emails</button>
+                <div id="classify-result" class="mt-3 text-sm hidden"></div>
+            </div>
+
             <div class="card">
                 <h2 class="text-lg font-semibold text-white mb-4">Pipeline Info</h2>
                 <div class="text-sm space-y-2">
@@ -210,6 +231,7 @@
             el.classList.toggle('active', el.dataset.tab === tab);
         });
         if (tab === 'history') loadHistory();
+        if (tab === 'actions') refreshClassifyStatus();
     }
 
     // Dashboard
@@ -271,6 +293,7 @@
         const selects = [
             document.getElementById('history-account-filter'),
             document.getElementById('reset-account-select'),
+            document.getElementById('classify-account-select'),
         ];
         selects.forEach(sel => {
             const first = sel.options[0];
@@ -388,6 +411,101 @@
             resultEl.className = 'mt-3 text-sm text-red-400';
             resultEl.textContent = 'Request failed: ' + err.message;
         }
+    }
+
+    // Classify previous emails (backfill)
+    let classifyPollTimer = null;
+
+    async function classifyPrevious() {
+        const account = document.getElementById('classify-account-select').value;
+        const maxMessages = parseInt(document.getElementById('classify-max').value, 10) || 50;
+        const resultEl = document.getElementById('classify-result');
+        const btn = document.getElementById('classify-btn');
+
+        resultEl.classList.remove('hidden');
+        if (!account) {
+            resultEl.className = 'mt-3 text-sm text-red-400';
+            resultEl.textContent = 'Select an account first.';
+            return;
+        }
+
+        resultEl.className = 'mt-3 text-sm text-slate-400';
+        resultEl.textContent = 'Starting…';
+        btn.disabled = true;
+
+        try {
+            const data = await api('/classify-previous', {
+                method: 'POST',
+                body: JSON.stringify({ account, max_messages: maxMessages }),
+            });
+            if (data.error) {
+                resultEl.className = 'mt-3 text-sm text-red-400';
+                resultEl.textContent = 'Error: ' + data.error;
+                btn.disabled = false;
+                return;
+            }
+            pollClassifyStatus();
+        } catch (err) {
+            resultEl.className = 'mt-3 text-sm text-red-400';
+            resultEl.textContent = 'Request failed: ' + err.message;
+            btn.disabled = false;
+        }
+    }
+
+    function renderClassifyStatus(status) {
+        const resultEl = document.getElementById('classify-result');
+        const btn = document.getElementById('classify-btn');
+        // No job has ever run.
+        if (!status || (!status.running && !status.started_at)) {
+            resultEl.classList.add('hidden');
+            btn.disabled = false;
+            return;
+        }
+        resultEl.classList.remove('hidden');
+        if (status.running) {
+            btn.disabled = true;
+            resultEl.className = 'mt-3 text-sm text-slate-300';
+            resultEl.textContent = `Classifying ${status.account || ''}: ${status.handled} / ${status.total || 0} handled…`;
+        } else {
+            btn.disabled = false;
+            if (status.error) {
+                resultEl.className = 'mt-3 text-sm text-red-400';
+                resultEl.textContent = `Failed after ${status.handled} message(s): ${status.error}`;
+            } else {
+                resultEl.className = 'mt-3 text-sm text-emerald-400';
+                resultEl.textContent = `Done — handled ${status.handled} message(s) for ${status.account || ''}.`;
+            }
+        }
+    }
+
+    async function pollClassifyStatus() {
+        if (classifyPollTimer) { clearInterval(classifyPollTimer); classifyPollTimer = null; }
+        const tick = async () => {
+            let status;
+            try {
+                status = await api('/classify-previous/status');
+            } catch (err) {
+                if (classifyPollTimer) { clearInterval(classifyPollTimer); classifyPollTimer = null; }
+                return;
+            }
+            renderClassifyStatus(status);
+            if (!status.running && classifyPollTimer) {
+                clearInterval(classifyPollTimer);
+                classifyPollTimer = null;
+                setTimeout(loadDashboard, 500); // refresh processed counts
+            }
+        };
+        classifyPollTimer = setInterval(tick, 1500);
+        tick();
+    }
+
+    // Reflect any in-progress/last run when entering the Actions tab.
+    async function refreshClassifyStatus() {
+        try {
+            const status = await api('/classify-previous/status');
+            renderClassifyStatus(status);
+            if (status.running && !classifyPollTimer) pollClassifyStatus();
+        } catch (err) { /* ignore */ }
     }
 
     // Utilities
