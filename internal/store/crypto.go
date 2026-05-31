@@ -4,10 +4,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
-	"log/slog"
 )
 
 // EncryptToken encrypts plaintext data using AES-GCM with the provided key.
@@ -37,8 +35,6 @@ func EncryptToken(plaintext []byte, key []byte) ([]byte, error) {
 // DecryptToken decrypts ciphertext using AES-GCM with the provided key.
 // The ciphertext should have the nonce prepended (as returned by EncryptToken).
 func DecryptToken(ciphertext []byte, key []byte) ([]byte, error) {
-	slog.Debug("DecryptToken called", "key_hex", hex.EncodeToString(key), "ciphertext_len", len(ciphertext))
-	
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
