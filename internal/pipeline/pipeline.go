@@ -43,6 +43,7 @@ type Pipeline struct {
 	categories   map[string]string         // category name -> label name mapping
 	aiLabelIDs   map[int64]map[string]bool // account ID -> set of AI label IDs
 	logger       *slog.Logger
+	dryRun       bool
 }
 
 // New creates a new Pipeline with the given dependencies.
@@ -72,6 +73,13 @@ func New(
 // WithLogger sets a custom logger for the pipeline.
 func (p *Pipeline) WithLogger(logger *slog.Logger) *Pipeline {
 	p.logger = logger
+	return p
+}
+
+// WithDryRun enables dry-run mode: classify emails but don't apply labels or
+// record them as processed. Results are logged only.
+func (p *Pipeline) WithDryRun(dryRun bool) *Pipeline {
+	p.dryRun = dryRun
 	return p
 }
 
@@ -108,7 +116,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 	}
 
-	p.logger.Info("pipeline starting", "poll_interval", pollInterval)
+	p.logger.Info("pipeline starting", "poll_interval", pollInterval, "dry_run", p.dryRun)
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -368,6 +376,21 @@ func (p *Pipeline) processMessage(ctx context.Context, client *gmail.Client, acc
 
 	// 4. Get the label for the category
 	labelName := p.GetLabelForCategory(decision.Category)
+
+	// In dry-run mode, log the classification result but don't apply labels or record
+	if p.dryRun {
+		logger.Info("[dry-run] message classified",
+			"category", decision.Category,
+			"confidence", decision.Confidence,
+			"label", labelName,
+			"from", msg.From,
+			"subject", msg.Subject,
+			"classify_latency_ms", classifyLatency.Milliseconds(),
+			"total_latency_ms", time.Since(start).Milliseconds(),
+		)
+		return nil
+	}
+
 	if labelName == "" {
 		// No label configured for this category, skip labeling
 		// but still record as processed
