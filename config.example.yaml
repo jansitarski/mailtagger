@@ -106,6 +106,14 @@ categories:
       Personal correspondence from individuals, family, or friends.
       Human-written messages that are not automated or bulk-sent.
 
+  # Required fallback category. A category named exactly "Others" must always be
+  # present; the classifier assigns it to any message that doesn't match the
+  # categories above (and to any hallucinated/unknown category the LLM returns).
+  - name: Others
+    label: automated/others
+    description: |
+      Emails that do not clearly fit any other category.
+
   # Example: Additional categories
   # - name: spam
   #   label: automated/spam

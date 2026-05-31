@@ -929,6 +929,11 @@ func runSetup(dbPath, configPath, clientSecretPath string) error {
 					Label:       "AI/personal",
 					Description: "Personal correspondence from individuals, family, or friends.",
 				},
+				{
+					Name:        "Others",
+					Label:       "AI/others",
+					Description: "Emails that do not fit any other category (required fallback).",
+				},
 			},
 		}
 	}
